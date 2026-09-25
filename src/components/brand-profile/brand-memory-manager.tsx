@@ -13,6 +13,14 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -21,7 +29,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/toast-provider";
 import { getApiErrorMessage, parseApiPayload } from "@/lib/client-api";
@@ -89,18 +96,18 @@ function formatDateTime(value: string) {
 
 function MemoryForm({
   values,
-  submitLabel,
   isSaving,
   onChange,
   onSubmit,
   onCancel,
+  submitLabel,
 }: {
   values: BrandMemoryFormState;
-  submitLabel: string;
   isSaving: boolean;
   onChange: (values: BrandMemoryFormState) => void;
   onSubmit: () => void;
-  onCancel?: () => void;
+  onCancel: () => void;
+  submitLabel: string;
 }) {
   return (
     <div className="space-y-4">
@@ -171,16 +178,14 @@ function MemoryForm({
             onChange({ ...values, content: event.target.value })
           }
           placeholder="记录品牌长期偏好、禁用表达、平台经验或内容规则。"
-          rows={4}
+          rows={5}
         />
       </label>
 
-      <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
-        {onCancel ? (
-          <Button type="button" variant="outline" onClick={onCancel}>
-            取消
-          </Button>
-        ) : null}
+      <DialogFooter>
+        <Button type="button" variant="outline" onClick={onCancel}>
+          取消
+        </Button>
         <Button type="button" disabled={isSaving} onClick={onSubmit}>
           {isSaving ? (
             <Loader2 className="size-4 animate-spin" />
@@ -191,7 +196,7 @@ function MemoryForm({
           )}
           {submitLabel}
         </Button>
-      </div>
+      </DialogFooter>
     </div>
   );
 }
@@ -206,7 +211,10 @@ export function BrandMemoryManager({
   const [memories, setMemories] = useState(initialMemories);
   const [createForm, setCreateForm] = useState<BrandMemoryFormState>(emptyForm);
   const [editForm, setEditForm] = useState<BrandMemoryFormState>(emptyForm);
-  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingMemory, setEditingMemory] = useState<BrandMemoryItem | null>(
+    null,
+  );
+  const [createOpen, setCreateOpen] = useState(false);
   const [savingId, setSavingId] = useState<string | null>(null);
   const [notice, setNotice] = useState<NoticeState>(null);
 
@@ -228,6 +236,7 @@ export function BrandMemoryManager({
 
       setMemories((current) => [payload.memory, ...current]);
       setCreateForm(emptyForm);
+      setCreateOpen(false);
       setNotice({ type: "success", message: "品牌记忆已创建。" });
       showToast({ type: "success", title: "品牌记忆已创建" });
       router.refresh();
@@ -240,12 +249,14 @@ export function BrandMemoryManager({
     }
   }
 
-  async function updateMemory(memoryId: string) {
+  async function updateMemory() {
+    if (!editingMemory) return;
+
     setNotice(null);
-    setSavingId(memoryId);
+    setSavingId(editingMemory.id);
 
     try {
-      const response = await fetch(`/api/brand-memories/${memoryId}`, {
+      const response = await fetch(`/api/brand-memories/${editingMemory.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(editForm),
@@ -258,10 +269,10 @@ export function BrandMemoryManager({
 
       setMemories((current) =>
         current.map((memory) =>
-          memory.id === memoryId ? payload.memory : memory,
+          memory.id === editingMemory.id ? payload.memory : memory,
         ),
       );
-      setEditingId(null);
+      setEditingMemory(null);
       setNotice({ type: "success", message: "品牌记忆已更新。" });
       showToast({ type: "success", title: "品牌记忆已更新" });
       router.refresh();
@@ -307,127 +318,155 @@ export function BrandMemoryManager({
   }
 
   function startEdit(memory: BrandMemoryItem) {
-    setEditingId(memory.id);
+    setEditingMemory(memory);
     setEditForm(toFormState(memory));
     setNotice(null);
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-          <div>
-            <CardTitle className="flex items-center gap-2">
-              <Brain className="size-4 text-primary" />
-              品牌记忆
-            </CardTitle>
-            <CardDescription>
-              这些记忆会影响 AI 后续生成的文案风格、禁用表达和运营建议。
-            </CardDescription>
+    <>
+      <Card>
+        <CardHeader>
+          <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+            <div>
+              <CardTitle className="flex items-center gap-2">
+                <Brain className="size-4 text-primary" />
+                品牌记忆
+              </CardTitle>
+              <CardDescription>
+                记录长期偏好、品牌规则、平台经验、内容规则和合规规则。
+              </CardDescription>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge variant="secondary">{memories.length} 条记忆</Badge>
+              <Button type="button" size="sm" onClick={() => setCreateOpen(true)}>
+                <Plus className="size-4" />
+                新增记忆
+              </Button>
+            </div>
           </div>
-          <Badge variant="secondary">{memories.length} 条记忆</Badge>
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-6">
-        {notice ? (
-          <div
-            className={`rounded-md border px-3 py-2 text-sm ${
-              notice.type === "success"
-                ? "border-emerald-200 bg-emerald-50 text-emerald-800"
-                : "border-destructive/30 bg-destructive/10 text-destructive"
-            }`}
-          >
-            {notice.message}
-          </div>
-        ) : null}
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {notice ? (
+            <div
+              className={`rounded-md border px-3 py-2 text-sm ${
+                notice.type === "success"
+                  ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                  : "border-destructive/30 bg-destructive/10 text-destructive"
+              }`}
+            >
+              {notice.message}
+            </div>
+          ) : null}
 
-        <div className="rounded-md border bg-muted/25 p-4">
-          <p className="mb-4 text-sm font-medium">新增品牌记忆</p>
+          {memories.length > 0 ? (
+            <div className="divide-y rounded-md border">
+              {memories.map((memory) => (
+                <div
+                  key={memory.id}
+                  className="flex flex-col gap-3 p-4 lg:flex-row lg:items-start lg:justify-between"
+                >
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge>{memoryTypeLabels[memory.type]}</Badge>
+                      <Badge variant="outline">
+                        重要度 {memory.importance ?? memory.priority}
+                      </Badge>
+                      <Badge variant="secondary">
+                        {memory.source ?? "手动添加"}
+                      </Badge>
+                    </div>
+                    <p className="mt-3 text-sm font-medium">
+                      {memory.title || "未命名记忆"}
+                    </p>
+                    <p className="mt-2 line-clamp-2 text-sm leading-6 text-muted-foreground">
+                      {memory.content}
+                    </p>
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      更新于 {formatDateTime(memory.updatedAt)}
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 gap-2">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => startEdit(memory)}
+                    >
+                      <Pencil className="size-4" />
+                      编辑
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      disabled={savingId === memory.id}
+                      onClick={() => deleteMemory(memory.id)}
+                    >
+                      {savingId === memory.id ? (
+                        <Loader2 className="size-4 animate-spin" />
+                      ) : (
+                        <Trash2 className="size-4" />
+                      )}
+                      删除
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="rounded-md border border-dashed p-8 text-center">
+              <p className="text-sm font-medium">暂无品牌记忆</p>
+              <p className="mt-2 text-sm text-muted-foreground">
+                可以先记录一条语气偏好、禁用表达或平台经验。
+              </p>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>新增品牌记忆</DialogTitle>
+            <DialogDescription>
+              品牌记忆会影响后续生成内容的语气、规则和运营建议。
+            </DialogDescription>
+          </DialogHeader>
           <MemoryForm
             values={createForm}
             submitLabel="新增记忆"
             isSaving={savingId === "create"}
             onChange={setCreateForm}
             onSubmit={createMemory}
+            onCancel={() => setCreateOpen(false)}
           />
-        </div>
+        </DialogContent>
+      </Dialog>
 
-        <Separator />
-
-        {memories.length > 0 ? (
-          <div className="space-y-3">
-            {memories.map((memory) => (
-              <div key={memory.id} className="rounded-md border p-4">
-                {editingId === memory.id ? (
-                  <MemoryForm
-                    values={editForm}
-                    submitLabel="保存修改"
-                    isSaving={savingId === memory.id}
-                    onChange={setEditForm}
-                    onSubmit={() => updateMemory(memory.id)}
-                    onCancel={() => setEditingId(null)}
-                  />
-                ) : (
-                  <div className="space-y-3">
-                    <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                      <div>
-                        <div className="flex flex-wrap items-center gap-2">
-                          <Badge>{memoryTypeLabels[memory.type]}</Badge>
-                          <Badge variant="outline">
-                            重要度 {memory.importance ?? memory.priority}
-                          </Badge>
-                          <Badge variant="secondary">
-                            {memory.source ?? "手动添加"}
-                          </Badge>
-                        </div>
-                        <p className="mt-3 text-sm font-medium">{memory.title}</p>
-                        <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                          {memory.content}
-                        </p>
-                        <p className="mt-3 text-xs text-muted-foreground">
-                          更新于 {formatDateTime(memory.updatedAt)}
-                        </p>
-                      </div>
-                      <div className="flex shrink-0 gap-2">
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="outline"
-                          onClick={() => startEdit(memory)}
-                        >
-                          <Pencil className="size-4" />
-                          编辑
-                        </Button>
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="destructive"
-                          disabled={savingId === memory.id}
-                          onClick={() => deleteMemory(memory.id)}
-                        >
-                          {savingId === memory.id ? (
-                            <Loader2 className="size-4 animate-spin" />
-                          ) : (
-                            <Trash2 className="size-4" />
-                          )}
-                          删除
-                        </Button>
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div className="rounded-md border border-dashed p-8 text-center">
-            <p className="text-sm font-medium">暂无品牌记忆</p>
-            <p className="mt-2 text-sm text-muted-foreground">
-              可以先记录一条语气偏好、禁用表达或平台经验。
-            </p>
-          </div>
-        )}
-      </CardContent>
-    </Card>
+      <Dialog
+        open={Boolean(editingMemory)}
+        onOpenChange={(open) => {
+          if (!open) setEditingMemory(null);
+        }}
+      >
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>编辑品牌记忆</DialogTitle>
+            <DialogDescription>
+              调整后会立即影响后续 AI 生成上下文。
+            </DialogDescription>
+          </DialogHeader>
+          <MemoryForm
+            values={editForm}
+            submitLabel="保存修改"
+            isSaving={Boolean(editingMemory && savingId === editingMemory.id)}
+            onChange={setEditForm}
+            onSubmit={updateMemory}
+            onCancel={() => setEditingMemory(null)}
+          />
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
