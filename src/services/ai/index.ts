@@ -551,51 +551,48 @@ export async function generateContentVariants(input: ContentGenerationPromptInpu
 export function createInsightsFallback(input: InsightsPromptInput): InsightsResult {
   const topPlatform = input.metrics.topPlatform ?? "暂无明确平台";
   const commonType = input.metrics.mostCommonContentType ?? "暂无明确类型";
+  const brandName = input.brandProfile?.brandName ?? input.workspaceName;
 
   return {
-    monthlySummary: `${input.monthLabel}，${input.workspaceName} 共生成 ${input.metrics.generatedContentCount} 条内容，计划发布 ${input.metrics.plannedPublishCount} 条，已发布 ${input.metrics.publishedCount} 条，还有 ${input.metrics.unplannedContentCount} 条内容未加入日历。当前素材侧还有 ${input.metrics.unusedAssetCount} 个未使用素材、${input.metrics.usedAssetCount} 个已使用素材；最常出现的平台是 ${topPlatform}，最常见内容类型是 ${commonType}。这些结论只基于系统内数据，不包含真实社媒平台表现。`,
+    monthlySummary: `${input.monthLabel}，${brandName} 生成 ${input.metrics.generatedContentCount} 条内容，已排期 ${input.metrics.plannedPublishCount} 条，已发布 ${input.metrics.publishedCount} 条。`,
     assetSuggestions:
       input.metrics.unusedAssetCount > 0
         ? [
-            `优先从 ${input.metrics.unusedAssetCount} 个未使用素材中挑选可复用素材，补齐下月内容日历。`,
-            "为高价值素材补充 AI 描述、标签、产品名和推荐平台，提升内容生成时的可用性。",
-            "把已发布内容中使用过的素材沉淀为可复用模板，减少每次重新选素材的成本。",
+            `当前还有 ${input.metrics.unusedAssetCount} 个未使用素材，优先挑 3 个生成内容。`,
+            "为新品图、场景图补齐标签，方便下次生成时快速选择。",
           ]
         : [
-            "当前未使用素材较少，建议继续上传新品图、场景图、用户反馈和卖点文档。",
-            "按平台建立素材批次，例如小红书封面、短视频开头镜头、轮播图素材。",
+            "未使用素材较少，建议继续上传新品图、场景图和卖点文档。",
           ],
     contentSuggestions: [
       input.metrics.generatedContentCount > 0
-        ? `复盘本月 ${input.metrics.generatedContentCount} 条生成内容，把表现稳定的标题结构和 CTA 写入品牌记忆。`
-        : "本月生成内容偏少，建议先围绕 3 个核心营销目标建立内容主题池。",
-      `当前最常见内容类型是 ${commonType}，下月可以增加其他内容类型来降低表达单一性。`,
+        ? `复盘本月 ${input.metrics.generatedContentCount} 条内容，把可复用标题写入品牌记忆。`
+        : "本月内容较少，先围绕 3 个核心卖点生成内容。",
       input.metrics.unplannedContentCount > 0
-        ? `把 ${input.metrics.unplannedContentCount} 条已保存但未排期的内容加入内容日历，形成更连续的发布节奏。`
-        : "已保存内容基本都有日历计划，下月重点放在发布状态维护和复盘沉淀。",
+        ? `还有 ${input.metrics.unplannedContentCount} 条内容未加入日历，先完成排期。`
+        : "已保存内容基本都有排期，重点维护发布状态。",
     ],
     platformSuggestions: [
       input.metrics.topPlatform
-        ? `继续围绕 ${topPlatform} 复用有效素材，同时检查是否需要补充其他平台版本。`
-        : "当前平台分布不明显，建议先选择 1-2 个主平台建立稳定内容节奏。",
-      "同一主题可以拆成不同平台格式：小红书重视标题和封面，TikTok/Instagram 重视开头钩子和视觉节奏。",
+        ? `当前内容集中在 ${topPlatform}，下周可补 1 个其他平台版本。`
+        : "平台分布还不明确，先选择 1-2 个主平台持续发布。",
+      `常见内容类型是 ${commonType}，可补充短视频脚本或轮播版本。`,
     ],
     riskSuggestions:
       input.metrics.highRiskContentCount > 0
         ? [
-            `本月有 ${input.metrics.highRiskContentCount} 条高风险内容，发布前需要人工复核绝对化承诺、敏感功效和禁用词。`,
-            "把反复出现的风险表达写入合规规则类品牌记忆，让后续生成自动避开。",
+            `本月有 ${input.metrics.highRiskContentCount} 条高风险内容，发布前先人工复核。`,
+            "把反复出现的风险表达写入合规类品牌记忆。",
           ]
         : [
-            "本月未发现高风险内容，但发布前仍建议检查禁用词、夸大承诺和平台格式风险。",
-            "继续维护 BrandProfile 的 forbiddenWords 和 BrandMemory 的合规规则。",
+            "本月暂无高风险内容，发布前继续检查禁用词和夸大承诺。",
           ],
     nextMonthPlan: [
-      "先确定下月 3-5 个主题，再为每个主题选择素材、生成内容、加入日历。",
-      "每周至少沉淀 1 条品牌记忆，把运营复盘变成后续 AI 生成的长期上下文。",
+      "下周先选 3 个素材，生成 3 条短内容并加入日历。",
+      "每周沉淀 1 条品牌记忆，让后续生成更贴近品牌。",
       input.metrics.unplannedContentCount > 0
-        ? "先把未加入日历的内容安排到下月发布节奏中，再补充新内容。"
-        : "优先补齐未使用素材的内容消化计划，并把高风险内容安排在发布前复核。",
+        ? "先处理未排期内容，再补充新内容。"
+        : "优先消化未使用素材，再扩展新主题。",
     ],
   };
 }
