@@ -5,14 +5,14 @@ import type { ContentStatus, ContentType, Platform } from "@prisma/client";
 import { useRouter } from "next/navigation";
 import {
   CalendarDays,
+  CalendarPlus,
   CheckCircle2,
   Clock3,
   Eye,
-  Filter,
   Loader2,
   Pencil,
-  Plus,
   Send,
+  Trash2,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -41,7 +41,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Separator } from "@/components/ui/separator";
 import {
   Table,
   TableBody,
@@ -50,6 +49,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/toast-provider";
 import { getApiErrorMessage, parseApiPayload } from "@/lib/client-api";
@@ -137,12 +137,16 @@ function toInputTime(date: Date) {
   ).padStart(2, "0")}`;
 }
 
+function getDayKey(date: Date) {
+  return toInputDate(date);
+}
+
 function getMonthKey(date: Date) {
   return `${date.getFullYear()}-${date.getMonth()}`;
 }
 
 function getStatusLabel(status: CalendarStatusFilter) {
-  return status === "ALL" ? "全部" : contentStatusLabels[status];
+  return status === "ALL" ? "全部状态" : contentStatusLabels[status];
 }
 
 function getStatusVariant(
@@ -159,7 +163,6 @@ function formatDateOnly(value: string) {
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
-    weekday: "short",
   }).format(new Date(value));
 }
 
@@ -203,22 +206,28 @@ function normalizePlanFromApiItem(
   return {
     id: item.id ?? fallback?.id ?? "",
     title: item.title ?? fallback?.title ?? "未命名主题",
-    description: item.description ?? null,
+    description: item.description ?? planFallback?.description ?? null,
     platform:
       item.platform ??
       planFallback?.platform ??
       contentFallback?.platforms[0] ??
       "XIAOHONGSHU",
     contentType:
-      item.contentType ?? planFallback?.contentType ?? contentFallback?.type ?? "POST",
+      item.contentType ??
+      planFallback?.contentType ??
+      contentFallback?.type ??
+      "POST",
     status: item.status ?? planFallback?.status ?? "SCHEDULED",
     scheduledAt:
       item.scheduledAt ?? planFallback?.scheduledAt ?? new Date().toISOString(),
-    publishedAt: item.publishedAt ?? null,
-    ownerName: item.ownerName ?? null,
-    notes: item.notes ?? null,
+    publishedAt: item.publishedAt ?? planFallback?.publishedAt ?? null,
+    ownerName: item.ownerName ?? planFallback?.ownerName ?? null,
+    notes: item.notes ?? planFallback?.notes ?? null,
     generatedContentId:
-      item.generatedContentId ?? planFallback?.generatedContentId ?? contentFallback?.id ?? null,
+      item.generatedContentId ??
+      planFallback?.generatedContentId ??
+      contentFallback?.id ??
+      null,
     generatedContentTitle:
       item.generatedContent?.title ??
       item.generatedContentTitle ??
@@ -243,14 +252,16 @@ function normalizePlanFromApiItem(
 export function CalendarContent({
   items,
   generatedContents,
+  workspaceName,
 }: {
   items: CalendarPlanItem[];
   generatedContents: CalendarGeneratedContentOption[];
+  workspaceName: string;
 }) {
   const router = useRouter();
   const { showToast } = useToast();
   const [plans, setPlans] = useState(() => sortPlans(items));
-  const [status, setStatus] = useState<CalendarStatusFilter>("ALL");
+  const [statusFilter, setStatusFilter] = useState<CalendarStatusFilter>("ALL");
   const [selectedDate, setSelectedDate] = useState<Date | undefined>(
     plans[0] ? new Date(plans[0].scheduledAt) : new Date(),
   );
@@ -260,6 +271,26 @@ export function CalendarContent({
   const [selectedContentId, setSelectedContentId] = useState(
     generatedContents[0]?.id ?? "",
   );
+  const [plannedDate, setPlannedDate] = useState(getDefaultDate);
+  const [plannedTime, setPlannedTime] = useState("10:00");
+  const [platform, setPlatform] = useState<Platform>(
+    generatedContents[0]?.platforms[0] ?? "XIAOHONGSHU",
+  );
+  const [topic, setTopic] = useState(generatedContents[0]?.title ?? "");
+  const [notes, setNotes] = useState("");
+  const [editDate, setEditDate] = useState(getDefaultDate);
+  const [editTime, setEditTime] = useState("10:00");
+  const [editPlatform, setEditPlatform] = useState<Platform>("XIAOHONGSHU");
+  const [editStatus, setEditStatus] = useState<ContentStatus>("SCHEDULED");
+  const [editTopic, setEditTopic] = useState("");
+  const [editNotes, setEditNotes] = useState("");
+  const [formError, setFormError] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [updatingItemId, setUpdatingItemId] = useState<string | null>(null);
+  const [deletingItemId, setDeletingItemId] = useState<string | null>(null);
+  const [isCreating, setIsCreating] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+
   const selectedContent = useMemo(
     () =>
       generatedContents.find((content) => content.id === selectedContentId) ??
@@ -267,30 +298,13 @@ export function CalendarContent({
       null,
     [generatedContents, selectedContentId],
   );
-  const [plannedDate, setPlannedDate] = useState(getDefaultDate);
-  const [plannedTime, setPlannedTime] = useState("10:00");
-  const [platform, setPlatform] = useState<Platform>(
-    selectedContent?.platforms[0] ?? "XIAOHONGSHU",
-  );
-  const [topic, setTopic] = useState(selectedContent?.title ?? "");
-  const [notes, setNotes] = useState("");
-  const [editDate, setEditDate] = useState(getDefaultDate);
-  const [editTime, setEditTime] = useState("10:00");
-  const [editPlatform, setEditPlatform] = useState<Platform>("XIAOHONGSHU");
-  const [editTopic, setEditTopic] = useState("");
-  const [editNotes, setEditNotes] = useState("");
-  const [formError, setFormError] = useState<string | null>(null);
-  const [successMessage, setSuccessMessage] = useState<string | null>(null);
-  const [updatingItemId, setUpdatingItemId] = useState<string | null>(null);
-  const [isCreating, setIsCreating] = useState(false);
-  const [isEditing, setIsEditing] = useState(false);
 
   const visiblePlans = useMemo(
     () =>
-      status === "ALL"
+      statusFilter === "ALL"
         ? plans
-        : plans.filter((item) => item.status === status),
-    [plans, status],
+        : plans.filter((item) => item.status === statusFilter),
+    [plans, statusFilter],
   );
 
   const plannedDates = useMemo(
@@ -298,10 +312,19 @@ export function CalendarContent({
     [plans],
   );
 
+  const selectedDayPlans = useMemo(() => {
+    const activeDay = getDayKey(selectedDate ?? new Date());
+    return plans.filter(
+      (plan) => getDayKey(new Date(plan.scheduledAt)) === activeDay,
+    );
+  }, [plans, selectedDate]);
+
   const selectedMonthPlans = useMemo(() => {
     const activeDate = selectedDate ?? new Date();
     const monthKey = getMonthKey(activeDate);
-    return plans.filter((plan) => getMonthKey(new Date(plan.scheduledAt)) === monthKey);
+    return plans.filter(
+      (plan) => getMonthKey(new Date(plan.scheduledAt)) === monthKey,
+    );
   }, [plans, selectedDate]);
 
   const detailPlan = useMemo(
@@ -336,6 +359,7 @@ export function CalendarContent({
     setEditDate(toInputDate(scheduledAt));
     setEditTime(toInputTime(scheduledAt));
     setEditPlatform(plan.platform);
+    setEditStatus(plan.status);
     setEditTopic(plan.title);
     setEditNotes(plan.notes ?? "");
     setFormError(null);
@@ -390,6 +414,60 @@ export function CalendarContent({
     }
   }
 
+  async function updateCalendarStatus(
+    itemId: string,
+    nextStatus: ContentStatus,
+    options: { showMessage?: boolean } = { showMessage: true },
+  ) {
+    const currentPlan = plans.find((plan) => plan.id === itemId);
+    if (currentPlan?.status === nextStatus) return currentPlan ?? null;
+
+    setUpdatingItemId(itemId);
+    setFormError(null);
+    setSuccessMessage(null);
+
+    try {
+      const response = await fetch(`/api/calendar-items/${itemId}/status`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: nextStatus }),
+      });
+      const data = await parseApiPayload(response);
+
+      if (!response.ok) {
+        throw new Error(getApiErrorMessage(data, "更新日历状态失败。"));
+      }
+
+      const updatedPlan = normalizePlanFromApiItem(data.item, currentPlan);
+      setPlans((current) =>
+        sortPlans(
+          current.map((plan) =>
+            plan.id === updatedPlan.id ? updatedPlan : plan,
+          ),
+        ),
+      );
+
+      if (options.showMessage) {
+        notifySuccess(
+          nextStatus === "PUBLISHED"
+            ? "已标记为发布，并同步更新内容与关联素材状态。"
+            : "日历状态已更新。",
+        );
+      }
+
+      router.refresh();
+      return updatedPlan;
+    } catch (error) {
+      notifyError(
+        "更新失败",
+        error instanceof Error ? error.message : "更新日历状态失败。",
+      );
+      return null;
+    } finally {
+      setUpdatingItemId(null);
+    }
+  }
+
   async function handleUpdateCalendarItem(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -426,6 +504,14 @@ export function CalendarContent({
         ),
       );
       setSelectedDate(new Date(updatedPlan.scheduledAt));
+
+      if (editStatus !== updatedPlan.status) {
+        const statusPlan = await updateCalendarStatus(updatedPlan.id, editStatus, {
+          showMessage: false,
+        });
+        if (!statusPlan) return;
+      }
+
       setEditItemId(null);
       notifySuccess("内容日历计划已更新。");
       router.refresh();
@@ -439,196 +525,195 @@ export function CalendarContent({
     }
   }
 
-  async function handleStatusChange(itemId: string, nextStatus: ContentStatus) {
-    const currentPlan = plans.find((plan) => plan.id === itemId);
-    if (currentPlan?.status === nextStatus) return;
+  async function handleDeleteCalendarItem(plan: CalendarPlanItem) {
+    const confirmed = window.confirm(
+      "确定移除这条发布计划吗？已保存内容和素材不会被删除。",
+    );
+    if (!confirmed) return;
 
-    setUpdatingItemId(itemId);
+    setDeletingItemId(plan.id);
     setFormError(null);
     setSuccessMessage(null);
 
     try {
-      const response = await fetch(`/api/calendar-items/${itemId}/status`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: nextStatus }),
+      const response = await fetch(`/api/calendar-items/${plan.id}`, {
+        method: "DELETE",
       });
       const data = await parseApiPayload(response);
 
       if (!response.ok) {
-        throw new Error(getApiErrorMessage(data, "更新日历状态失败。"));
+        throw new Error(getApiErrorMessage(data, "移除内容日历计划失败。"));
       }
 
-      setPlans((current) =>
-        current.map((plan) =>
-          plan.id === itemId
-            ? {
-                ...plan,
-                status: nextStatus,
-                publishedAt:
-                  nextStatus === "PUBLISHED"
-                    ? (data.item?.publishedAt ?? new Date().toISOString())
-                    : null,
-              }
-            : plan,
-        ),
-      );
-      notifySuccess(
-        nextStatus === "PUBLISHED"
-          ? "已标记为发布，并同步更新内容与关联素材状态。"
-          : "日历状态已更新。",
-      );
+      setPlans((current) => current.filter((item) => item.id !== plan.id));
+      if (detailItemId === plan.id) setDetailItemId(null);
+      if (editItemId === plan.id) setEditItemId(null);
+      notifySuccess("内容日历计划已移除。");
       router.refresh();
     } catch (error) {
       notifyError(
-        "更新失败",
-        error instanceof Error ? error.message : "更新日历状态失败。",
+        "移除失败",
+        error instanceof Error ? error.message : "移除内容日历计划失败。",
       );
     } finally {
-      setUpdatingItemId(null);
+      setDeletingItemId(null);
     }
   }
 
+  const createPlanDialog = (
+    <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
+      <DialogTrigger asChild>
+        <Button>
+          <CalendarPlus className="size-4" />
+          添加计划
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="max-h-[88vh] overflow-y-auto sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>添加发布计划</DialogTitle>
+          <DialogDescription>
+            从已保存内容中选择一条，设置发布日期、时间和平台。
+          </DialogDescription>
+        </DialogHeader>
+        {generatedContents.length === 0 ? (
+          <div className="rounded-md border border-dashed p-6 text-sm text-muted-foreground">
+            还没有可加入日历的已保存内容。请先到内容生成页保存一条内容。
+          </div>
+        ) : (
+          <form className="space-y-4" onSubmit={handleCreateCalendarItem}>
+            <div className="grid gap-4 md:grid-cols-2">
+              <label className="space-y-2 text-sm font-medium md:col-span-2">
+                选择内容
+                <Select
+                  value={selectedContent?.id ?? ""}
+                  onValueChange={handleContentChange}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="选择内容库中的生成内容" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {generatedContents.map((content) => (
+                      <SelectItem key={content.id} value={content.id}>
+                        {content.title}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </label>
+              <label className="space-y-2 text-sm font-medium">
+                发布日期
+                <Input
+                  type="date"
+                  value={plannedDate}
+                  onChange={(event) => setPlannedDate(event.target.value)}
+                  required
+                />
+              </label>
+              <label className="space-y-2 text-sm font-medium">
+                发布时间
+                <Input
+                  type="time"
+                  value={plannedTime}
+                  onChange={(event) => setPlannedTime(event.target.value)}
+                  required
+                />
+              </label>
+              <label className="space-y-2 text-sm font-medium">
+                平台
+                <Select
+                  value={platform}
+                  onValueChange={(value) => setPlatform(value as Platform)}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {platformOptions.map((item) => (
+                      <SelectItem key={item} value={item}>
+                        {platformLabels[item]}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </label>
+              <label className="space-y-2 text-sm font-medium">
+                内容标题
+                <Input
+                  value={topic}
+                  onChange={(event) => setTopic(event.target.value)}
+                  placeholder="例如：新品上市预热"
+                  required
+                />
+              </label>
+              <label className="space-y-2 text-sm font-medium md:col-span-2">
+                备注
+                <Textarea
+                  value={notes}
+                  onChange={(event) => setNotes(event.target.value)}
+                  placeholder="可填写发布注意事项或协作说明。"
+                  rows={3}
+                />
+              </label>
+            </div>
+            {selectedContent ? (
+              <div className="rounded-md border bg-muted/30 p-3 text-sm text-muted-foreground">
+                <div className="font-medium text-foreground">
+                  {selectedContent.title}
+                </div>
+                <div className="mt-1 line-clamp-2">{selectedContent.body}</div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <Badge variant="outline">
+                    {contentTypeLabels[selectedContent.type]}
+                  </Badge>
+                  <Badge variant="secondary">
+                    {selectedContent.assets.length} 个关联素材
+                  </Badge>
+                </div>
+              </div>
+            ) : null}
+            {formError ? (
+              <p className="text-sm text-destructive">{formError}</p>
+            ) : null}
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setCreateDialogOpen(false)}
+              >
+                取消
+              </Button>
+              <Button type="submit" disabled={isCreating || !selectedContent}>
+                {isCreating ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <CalendarPlus className="size-4" />
+                )}
+                创建计划
+              </Button>
+            </DialogFooter>
+          </form>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+
   return (
     <div className="space-y-4">
-      <div className="flex flex-col gap-3 rounded-lg border bg-card p-4 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h2 className="text-base font-semibold">内容日历管理</h2>
-          <p className="mt-1 text-sm text-muted-foreground">
-            创建发布计划、调整时间，并在发布后同步更新内容和素材状态。
-          </p>
+      <div className="rounded-lg border bg-card p-4">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <p className="text-xs font-medium uppercase tracking-wide text-primary">
+              Content Calendar
+            </p>
+            <h1 className="mt-1 text-2xl font-semibold">
+              {workspaceName} 内容日历
+            </h1>
+            <p className="mt-1 text-sm text-muted-foreground">
+              只管理内容计划、发布时间和发布状态。
+            </p>
+          </div>
+          {createPlanDialog}
         </div>
-        <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
-          <DialogTrigger asChild>
-            <Button disabled={generatedContents.length === 0}>
-              <Plus className="size-4" />
-              加入日历
-            </Button>
-          </DialogTrigger>
-          <DialogContent className="max-h-[88vh] overflow-y-auto sm:max-w-2xl">
-            <DialogHeader>
-              <DialogTitle>加入内容日历</DialogTitle>
-              <DialogDescription>
-                选择一条已保存内容，设置发布日期、时间、平台和主题。
-              </DialogDescription>
-            </DialogHeader>
-            <form className="space-y-4" onSubmit={handleCreateCalendarItem}>
-              <div className="grid gap-4 md:grid-cols-2">
-                <label className="space-y-2 text-sm font-medium md:col-span-2">
-                  选择内容
-                  <Select
-                    value={selectedContent?.id ?? ""}
-                    onValueChange={handleContentChange}
-                    disabled={generatedContents.length === 0}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="选择内容库中的生成内容" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {generatedContents.map((content) => (
-                        <SelectItem key={content.id} value={content.id}>
-                          {content.title}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </label>
-                <label className="space-y-2 text-sm font-medium">
-                  发布日期
-                  <Input
-                    type="date"
-                    value={plannedDate}
-                    onChange={(event) => setPlannedDate(event.target.value)}
-                    required
-                  />
-                </label>
-                <label className="space-y-2 text-sm font-medium">
-                  发布时间
-                  <Input
-                    type="time"
-                    value={plannedTime}
-                    onChange={(event) => setPlannedTime(event.target.value)}
-                    required
-                  />
-                </label>
-                <label className="space-y-2 text-sm font-medium">
-                  平台
-                  <Select
-                    value={platform}
-                    onValueChange={(value) => setPlatform(value as Platform)}
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {platformOptions.map((item) => (
-                        <SelectItem key={item} value={item}>
-                          {platformLabels[item]}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </label>
-                <label className="space-y-2 text-sm font-medium">
-                  内容主题
-                  <Input
-                    value={topic}
-                    onChange={(event) => setTopic(event.target.value)}
-                    placeholder="例如：新品上市预热"
-                    required
-                  />
-                </label>
-                <label className="space-y-2 text-sm font-medium md:col-span-2">
-                  备注
-                  <Textarea
-                    value={notes}
-                    onChange={(event) => setNotes(event.target.value)}
-                    placeholder="可填写发布注意事项、素材使用要求或协作说明。"
-                    rows={4}
-                  />
-                </label>
-              </div>
-              {selectedContent ? (
-                <div className="rounded-md border bg-muted/30 p-3 text-sm text-muted-foreground">
-                  <div className="font-medium text-foreground">
-                    {selectedContent.title}
-                  </div>
-                  <div className="mt-1 line-clamp-2">
-                    {selectedContent.body}
-                  </div>
-                  <div className="mt-2 flex flex-wrap gap-2">
-                    <Badge variant="outline">
-                      {contentTypeLabels[selectedContent.type]}
-                    </Badge>
-                    <Badge variant="secondary">
-                      {selectedContent.assets.length} 个关联素材
-                    </Badge>
-                  </div>
-                </div>
-              ) : null}
-              {formError ? (
-                <p className="text-sm text-destructive">{formError}</p>
-              ) : null}
-              <DialogFooter>
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => setCreateDialogOpen(false)}
-                >
-                  取消
-                </Button>
-                <Button type="submit" disabled={isCreating || !selectedContent}>
-                  {isCreating ? (
-                    <Loader2 className="size-4 animate-spin" />
-                  ) : (
-                    <Plus className="size-4" />
-                  )}
-                  创建排期
-                </Button>
-              </DialogFooter>
-            </form>
-          </DialogContent>
-        </Dialog>
       </div>
 
       {successMessage ? (
@@ -643,234 +728,264 @@ export function CalendarContent({
         </div>
       ) : null}
 
-      {plans.length === 0 ? (
-        <div className="rounded-md border border-dashed bg-muted/30 p-8 text-center">
-          <p className="text-sm font-medium">
-            把生成的内容加入日历，规划接下来一周的发布。
-          </p>
-          <p className="mt-2 text-sm text-muted-foreground">
-            {generatedContents.length > 0
-              ? "点击加入日历，为已保存内容设置发布日期、时间和平台。"
-              : "先在 Content Studio 保存一条内容，再回到这里创建发布计划。"}
-          </p>
+      <Tabs defaultValue="list" className="space-y-4">
+        <div className="flex flex-col gap-3 rounded-lg border bg-card p-3 md:flex-row md:items-center md:justify-between">
+          <TabsList>
+            <TabsTrigger value="list">列表视图</TabsTrigger>
+            <TabsTrigger value="month">月历视图</TabsTrigger>
+          </TabsList>
+          <div className="flex items-center gap-2">
+            <Select
+              value={statusFilter}
+              onValueChange={(value) =>
+                setStatusFilter(value as CalendarStatusFilter)
+              }
+            >
+              <SelectTrigger className="w-36">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {statusFilters.map((item) => (
+                  <SelectItem key={item} value={item}>
+                    {getStatusLabel(item)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
         </div>
-      ) : null}
 
-      <div className="grid gap-4 xl:grid-cols-[340px_1fr]">
-        <Card className="self-start">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <CalendarDays className="size-4 text-primary" />
-              月历视图
-            </CardTitle>
-            <CardDescription>查看当月内容计划。</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <Calendar
-              mode="single"
-              selected={selectedDate}
-              onSelect={(date) => setSelectedDate(date)}
-              defaultMonth={selectedDate}
-              modifiers={{ planned: plannedDates }}
-              modifiersClassNames={{
-                planned: "border border-primary/50 bg-primary/5",
-              }}
-            />
-            <Separator />
-            <div className="space-y-3">
-              <div className="flex items-center justify-between text-sm">
-                <span className="font-medium">本月计划</span>
-                <Badge variant="secondary">{selectedMonthPlans.length} 条</Badge>
-              </div>
-              {selectedMonthPlans.length > 0 ? (
-                <div className="space-y-2">
-                  {selectedMonthPlans.slice(0, 6).map((plan) => (
-                    <button
-                      key={plan.id}
-                      type="button"
-                      className="w-full rounded-md border px-3 py-2 text-left text-sm transition-colors hover:bg-muted/40"
-                      onClick={() => setDetailItemId(plan.id)}
-                    >
-                      <div className="flex items-center justify-between gap-3">
-                        <span className="truncate font-medium">{plan.title}</span>
-                        <Badge variant={getStatusVariant(plan.status)}>
-                          {contentStatusLabels[plan.status]}
-                        </Badge>
-                      </div>
-                      <div className="mt-1 text-xs text-muted-foreground">
-                        {formatDateOnly(plan.scheduledAt)} ·{" "}
-                        {formatTimeOnly(plan.scheduledAt)}
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              ) : (
-                <div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
-                  {plans.length === 0
-                    ? "还没有内容计划。"
-                    : "当前月份还没有内容计划。"}
-                </div>
-              )}
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-              <div>
-                <CardTitle>列表视图</CardTitle>
-                <CardDescription>
-                  管理发布日期、时间、平台、状态和发布动作。
-                </CardDescription>
-              </div>
-              <div className="flex items-center gap-2">
-                <Filter className="size-4 text-muted-foreground" />
-                <Select
-                  value={status}
-                  onValueChange={(value) =>
-                    setStatus(value as CalendarStatusFilter)
-                  }
-                >
-                  <SelectTrigger className="w-36">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {statusFilters.map((item) => (
-                      <SelectItem key={item} value={item}>
-                        {getStatusLabel(item)}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-          </CardHeader>
-          <CardContent>
-            {visiblePlans.length > 0 ? (
-              <div className="overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>发布日期</TableHead>
-                      <TableHead>发布时间</TableHead>
-                      <TableHead>平台</TableHead>
-                      <TableHead>内容标题</TableHead>
-                      <TableHead>状态</TableHead>
-                      <TableHead className="text-right">素材</TableHead>
-                      <TableHead className="text-right">操作</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {visiblePlans.map((plan) => (
-                      <TableRow key={plan.id}>
-                        <TableCell className="whitespace-nowrap">
-                          {formatDateOnly(plan.scheduledAt)}
-                        </TableCell>
-                        <TableCell className="whitespace-nowrap">
-                          <span className="inline-flex items-center gap-1">
-                            <Clock3 className="size-3.5 text-muted-foreground" />
-                            {formatTimeOnly(plan.scheduledAt)}
-                          </span>
-                        </TableCell>
-                        <TableCell>{platformLabels[plan.platform]}</TableCell>
-                        <TableCell className="min-w-56">
-                          <button
-                            type="button"
-                            className="text-left font-medium hover:text-primary"
-                            onClick={() => setDetailItemId(plan.id)}
-                          >
-                            {plan.generatedContentTitle ?? "未关联内容"}
-                          </button>
-                          <div className="mt-1 text-xs text-muted-foreground">
-                            主题：{plan.title}
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          <Select
-                            value={plan.status}
-                            onValueChange={(value) =>
-                              handleStatusChange(plan.id, value as ContentStatus)
-                            }
-                            disabled={updatingItemId === plan.id}
-                          >
-                            <SelectTrigger className="w-32">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {statusOptions.map((item) => (
-                                <SelectItem key={item} value={item}>
-                                  {contentStatusLabels[item]}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        </TableCell>
-                        <TableCell className="text-right">
-                          {plan.generatedContentAssets.length}
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex justify-end gap-2">
-                            <Button
+        <TabsContent value="list">
+          <Card>
+            <CardHeader>
+              <CardTitle>发布计划</CardTitle>
+              <CardDescription>
+                按日期管理内容标题、平台、状态和关联素材。
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {visiblePlans.length > 0 ? (
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>发布日期</TableHead>
+                        <TableHead>时间</TableHead>
+                        <TableHead>平台</TableHead>
+                        <TableHead>内容标题</TableHead>
+                        <TableHead>状态</TableHead>
+                        <TableHead className="text-right">关联素材</TableHead>
+                        <TableHead className="text-right">操作</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {visiblePlans.map((plan) => (
+                        <TableRow key={plan.id}>
+                          <TableCell className="whitespace-nowrap">
+                            {formatDateOnly(plan.scheduledAt)}
+                          </TableCell>
+                          <TableCell className="whitespace-nowrap">
+                            <span className="inline-flex items-center gap-1">
+                              <Clock3 className="size-3.5 text-muted-foreground" />
+                              {formatTimeOnly(plan.scheduledAt)}
+                            </span>
+                          </TableCell>
+                          <TableCell>{platformLabels[plan.platform]}</TableCell>
+                          <TableCell className="min-w-64">
+                            <button
                               type="button"
-                              size="icon"
-                              variant="outline"
-                              title="查看详情"
+                              className="text-left font-medium hover:text-primary"
                               onClick={() => setDetailItemId(plan.id)}
                             >
-                              <Eye className="size-4" />
-                            </Button>
-                            <Button
-                              type="button"
-                              size="icon"
-                              variant="outline"
-                              title="修改计划"
-                              onClick={() => openEdit(plan)}
-                            >
-                              <Pencil className="size-4" />
-                            </Button>
-                            <Button
-                              type="button"
-                              size="sm"
-                              disabled={
-                                plan.status === "PUBLISHED" ||
-                                updatingItemId === plan.id
-                              }
-                              onClick={() =>
-                                handleStatusChange(plan.id, "PUBLISHED")
-                              }
-                            >
-                              {updatingItemId === plan.id ? (
-                                <Loader2 className="size-4 animate-spin" />
-                              ) : (
-                                <Send className="size-4" />
-                              )}
-                              已发布
-                            </Button>
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
-            ) : (
-              <div className="rounded-md border border-dashed p-8 text-center">
-                <div className="text-sm font-medium">
-                  {plans.length === 0
-                    ? "把生成的内容加入日历，规划接下来一周的发布。"
-                    : "暂无匹配计划"}
+                              {plan.generatedContentTitle ?? plan.title}
+                            </button>
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant={getStatusVariant(plan.status)}>
+                              {contentStatusLabels[plan.status]}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="text-right">
+                            {plan.generatedContentAssets.length}
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex justify-end gap-2">
+                              <Button
+                                type="button"
+                                size="icon"
+                                variant="outline"
+                                title="查看内容"
+                                onClick={() => setDetailItemId(plan.id)}
+                              >
+                                <Eye className="size-4" />
+                              </Button>
+                              <Button
+                                type="button"
+                                size="icon"
+                                variant="outline"
+                                title="编辑计划"
+                                onClick={() => openEdit(plan)}
+                              >
+                                <Pencil className="size-4" />
+                              </Button>
+                              <Button
+                                type="button"
+                                size="sm"
+                                disabled={
+                                  plan.status === "PUBLISHED" ||
+                                  updatingItemId === plan.id
+                                }
+                                onClick={() =>
+                                  updateCalendarStatus(plan.id, "PUBLISHED")
+                                }
+                              >
+                                {updatingItemId === plan.id ? (
+                                  <Loader2 className="size-4 animate-spin" />
+                                ) : (
+                                  <Send className="size-4" />
+                                )}
+                                标记已发布
+                              </Button>
+                              <Button
+                                type="button"
+                                size="icon"
+                                variant="outline"
+                                title="移除计划"
+                                disabled={deletingItemId === plan.id}
+                                onClick={() => handleDeleteCalendarItem(plan)}
+                              >
+                                {deletingItemId === plan.id ? (
+                                  <Loader2 className="size-4 animate-spin" />
+                                ) : (
+                                  <Trash2 className="size-4" />
+                                )}
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
                 </div>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  {plans.length === 0
-                    ? "创建第一条排期后，它会出现在列表视图和月历视图中。"
-                    : "可以切换状态筛选，或从内容库添加新的排期。"}
-                </p>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      </div>
+              ) : (
+                <div className="rounded-md border border-dashed p-8 text-center">
+                  <div className="text-sm font-medium">
+                    {plans.length === 0 ? "还没有发布计划" : "暂无匹配计划"}
+                  </div>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    {plans.length === 0
+                      ? "从已保存内容添加第一条计划后，会出现在这里。"
+                      : "可以切换状态筛选，或添加新的发布计划。"}
+                  </p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="month">
+          <div className="grid gap-4 lg:grid-cols-[340px_1fr]">
+            <Card className="self-start">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <CalendarDays className="size-4 text-primary" />
+                  月历视图
+                </CardTitle>
+                <CardDescription>点击日期查看当天计划。</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <Calendar
+                  mode="single"
+                  selected={selectedDate}
+                  onSelect={(date) => setSelectedDate(date)}
+                  defaultMonth={selectedDate}
+                  modifiers={{ planned: plannedDates }}
+                  modifiersClassNames={{
+                    planned: "border border-primary/50 bg-primary/5",
+                  }}
+                />
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>
+                  {selectedDate
+                    ? `${formatDateOnly(selectedDate.toISOString())} 的计划`
+                    : "当天计划"}
+                </CardTitle>
+                <CardDescription>
+                  本月共 {selectedMonthPlans.length} 条计划。
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {selectedDayPlans.length > 0 ? (
+                  <div className="space-y-3">
+                    {selectedDayPlans.map((plan) => (
+                      <div
+                        key={plan.id}
+                        className="flex flex-col gap-3 rounded-md border p-3 sm:flex-row sm:items-center sm:justify-between"
+                      >
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Badge variant="outline">
+                              {formatTimeOnly(plan.scheduledAt)}
+                            </Badge>
+                            <Badge variant="secondary">
+                              {platformLabels[plan.platform]}
+                            </Badge>
+                            <Badge variant={getStatusVariant(plan.status)}>
+                              {contentStatusLabels[plan.status]}
+                            </Badge>
+                          </div>
+                          <button
+                            type="button"
+                            className="mt-2 text-left font-medium hover:text-primary"
+                            onClick={() => setDetailItemId(plan.id)}
+                          >
+                            {plan.generatedContentTitle ?? plan.title}
+                          </button>
+                          <p className="mt-1 text-sm text-muted-foreground">
+                            {plan.generatedContentAssets.length} 个关联素材
+                          </p>
+                        </div>
+                        <div className="flex shrink-0 gap-2">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => openEdit(plan)}
+                          >
+                            <Pencil className="size-4" />
+                            编辑计划
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            disabled={
+                              plan.status === "PUBLISHED" ||
+                              updatingItemId === plan.id
+                            }
+                            onClick={() =>
+                              updateCalendarStatus(plan.id, "PUBLISHED")
+                            }
+                          >
+                            标记已发布
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="rounded-md border border-dashed p-8 text-center text-sm text-muted-foreground">
+                    这一天还没有内容计划。
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+        </TabsContent>
+      </Tabs>
 
       <Dialog
         open={Boolean(detailPlan)}
@@ -882,14 +997,16 @@ export function CalendarContent({
           {detailPlan ? (
             <>
               <DialogHeader>
-                <DialogTitle>{detailPlan.generatedContentTitle ?? detailPlan.title}</DialogTitle>
+                <DialogTitle>
+                  {detailPlan.generatedContentTitle ?? detailPlan.title}
+                </DialogTitle>
                 <DialogDescription>
                   {formatDateOnly(detailPlan.scheduledAt)} ·{" "}
                   {formatTimeOnly(detailPlan.scheduledAt)} ·{" "}
                   {platformLabels[detailPlan.platform]}
                 </DialogDescription>
               </DialogHeader>
-              <div className="space-y-5">
+              <div className="space-y-4">
                 <div className="flex flex-wrap gap-2">
                   <Badge variant={getStatusVariant(detailPlan.status)}>
                     {contentStatusLabels[detailPlan.status]}
@@ -902,86 +1019,64 @@ export function CalendarContent({
                   </Badge>
                 </div>
 
+                <div className="rounded-md border p-4">
+                  <p className="text-sm font-medium">内容正文</p>
+                  <p className="mt-2 whitespace-pre-wrap break-words text-sm text-muted-foreground">
+                    {detailPlan.generatedContentBody ??
+                      detailPlan.description ??
+                      "暂无正文。"}
+                  </p>
+                </div>
+
                 <div className="grid gap-4 md:grid-cols-2">
                   <div className="rounded-md border p-4">
-                    <p className="text-sm font-medium">内容主题</p>
-                    <p className="mt-2 break-words text-sm text-muted-foreground">
-                      {detailPlan.title}
-                    </p>
-                  </div>
-                  <div className="rounded-md border p-4">
-                    <p className="text-sm font-medium">发布状态</p>
-                    <p className="mt-2 text-sm text-muted-foreground">
-                      {contentStatusLabels[detailPlan.status]}
-                      {detailPlan.publishedAt
-                        ? ` · ${new Date(detailPlan.publishedAt).toLocaleString("zh-CN")}`
-                        : ""}
-                    </p>
-                  </div>
-                </div>
-
-                <div>
-                  <p className="text-sm font-medium">内容正文</p>
-                  <div className="mt-2 rounded-md border bg-muted/25 p-4">
-                    <p className="whitespace-pre-line break-words text-sm leading-7 text-muted-foreground">
-                      {detailPlan.generatedContentBody ??
-                        detailPlan.description ??
-                        "暂无正文。"}
-                    </p>
-                  </div>
-                </div>
-
-                <div>
-                  <p className="text-sm font-medium">关联素材</p>
-                  <div className="mt-2 flex flex-wrap gap-2">
+                    <p className="text-sm font-medium">关联素材</p>
                     {detailPlan.generatedContentAssets.length > 0 ? (
-                      detailPlan.generatedContentAssets.map((asset) => (
-                        <Badge key={asset.id} variant="outline">
-                          {getAssetName(asset)}
-                        </Badge>
-                      ))
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {detailPlan.generatedContentAssets.map((asset) => (
+                          <Badge key={asset.id} variant="outline">
+                            {getAssetName(asset)}
+                          </Badge>
+                        ))}
+                      </div>
                     ) : (
-                      <span className="text-sm text-muted-foreground">
-                        暂无关联素材
-                      </span>
+                      <p className="mt-2 text-sm text-muted-foreground">
+                        暂无关联素材。
+                      </p>
                     )}
                   </div>
-                </div>
-
-                {detailPlan.notes ? (
-                  <div>
+                  <div className="rounded-md border p-4">
                     <p className="text-sm font-medium">备注</p>
-                    <p className="mt-2 break-words text-sm leading-6 text-muted-foreground">
-                      {detailPlan.notes}
+                    <p className="mt-2 whitespace-pre-wrap text-sm text-muted-foreground">
+                      {detailPlan.notes || "暂无备注。"}
                     </p>
                   </div>
-                ) : null}
-              </div>
-              <DialogFooter>
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => openEdit(detailPlan)}
-                >
-                  <Pencil className="size-4" />
-                  修改计划
-                </Button>
-                <Button
-                  type="button"
-                  disabled={
-                    detailPlan.status === "PUBLISHED" ||
-                    updatingItemId === detailPlan.id
-                  }
-                  onClick={() => handleStatusChange(detailPlan.id, "PUBLISHED")}
-                >
-                  {updatingItemId === detailPlan.id ? (
-                    <Loader2 className="size-4 animate-spin" />
-                  ) : (
+                </div>
+
+                <div className="flex flex-wrap justify-end gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => openEdit(detailPlan)}
+                  >
+                    <Pencil className="size-4" />
+                    编辑计划
+                  </Button>
+                  <Button
+                    type="button"
+                    disabled={
+                      detailPlan.status === "PUBLISHED" ||
+                      updatingItemId === detailPlan.id
+                    }
+                    onClick={() =>
+                      updateCalendarStatus(detailPlan.id, "PUBLISHED")
+                    }
+                  >
                     <Send className="size-4" />
-                  )}
-                  标记为已发布
-                </Button>
-              </DialogFooter>
+                    标记已发布
+                  </Button>
+                </div>
+              </div>
             </>
           ) : null}
         </DialogContent>
@@ -993,74 +1088,107 @@ export function CalendarContent({
           if (!open) setEditItemId(null);
         }}
       >
-        <DialogContent className="sm:max-w-2xl">
+        <DialogContent className="max-h-[88vh] overflow-y-auto sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>编辑发布计划</DialogTitle>
+            <DialogDescription>
+              调整发布时间、平台、标题和当前状态。
+            </DialogDescription>
+          </DialogHeader>
           {editPlan ? (
-            <>
-              <DialogHeader>
-                <DialogTitle>修改内容计划</DialogTitle>
-                <DialogDescription>
-                  修改发布时间、平台、主题和备注。状态请在列表中切换。
-                </DialogDescription>
-              </DialogHeader>
-              <form className="space-y-4" onSubmit={handleUpdateCalendarItem}>
-                <div className="grid gap-4 md:grid-cols-2">
-                  <label className="space-y-2 text-sm font-medium">
-                    发布日期
-                    <Input
-                      type="date"
-                      value={editDate}
-                      onChange={(event) => setEditDate(event.target.value)}
-                      required
-                    />
-                  </label>
-                  <label className="space-y-2 text-sm font-medium">
-                    发布时间
-                    <Input
-                      type="time"
-                      value={editTime}
-                      onChange={(event) => setEditTime(event.target.value)}
-                      required
-                    />
-                  </label>
-                  <label className="space-y-2 text-sm font-medium">
-                    平台
-                    <Select
-                      value={editPlatform}
-                      onValueChange={(value) => setEditPlatform(value as Platform)}
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {platformOptions.map((item) => (
-                          <SelectItem key={item} value={item}>
-                            {platformLabels[item]}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </label>
-                  <label className="space-y-2 text-sm font-medium">
-                    内容主题
-                    <Input
-                      value={editTopic}
-                      onChange={(event) => setEditTopic(event.target.value)}
-                      required
-                    />
-                  </label>
-                  <label className="space-y-2 text-sm font-medium md:col-span-2">
-                    备注
-                    <Textarea
-                      value={editNotes}
-                      onChange={(event) => setEditNotes(event.target.value)}
-                      rows={4}
-                    />
-                  </label>
-                </div>
-                {formError ? (
-                  <p className="text-sm text-destructive">{formError}</p>
-                ) : null}
-                <DialogFooter>
+            <form className="space-y-4" onSubmit={handleUpdateCalendarItem}>
+              <div className="grid gap-4 md:grid-cols-2">
+                <label className="space-y-2 text-sm font-medium">
+                  发布日期
+                  <Input
+                    type="date"
+                    value={editDate}
+                    onChange={(event) => setEditDate(event.target.value)}
+                    required
+                  />
+                </label>
+                <label className="space-y-2 text-sm font-medium">
+                  发布时间
+                  <Input
+                    type="time"
+                    value={editTime}
+                    onChange={(event) => setEditTime(event.target.value)}
+                    required
+                  />
+                </label>
+                <label className="space-y-2 text-sm font-medium">
+                  平台
+                  <Select
+                    value={editPlatform}
+                    onValueChange={(value) => setEditPlatform(value as Platform)}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {platformOptions.map((item) => (
+                        <SelectItem key={item} value={item}>
+                          {platformLabels[item]}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </label>
+                <label className="space-y-2 text-sm font-medium">
+                  状态
+                  <Select
+                    value={editStatus}
+                    onValueChange={(value) =>
+                      setEditStatus(value as ContentStatus)
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {statusOptions.map((item) => (
+                        <SelectItem key={item} value={item}>
+                          {contentStatusLabels[item]}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </label>
+                <label className="space-y-2 text-sm font-medium md:col-span-2">
+                  内容标题
+                  <Input
+                    value={editTopic}
+                    onChange={(event) => setEditTopic(event.target.value)}
+                    required
+                  />
+                </label>
+                <label className="space-y-2 text-sm font-medium md:col-span-2">
+                  备注
+                  <Textarea
+                    value={editNotes}
+                    onChange={(event) => setEditNotes(event.target.value)}
+                    rows={3}
+                  />
+                </label>
+              </div>
+              {formError ? (
+                <p className="text-sm text-destructive">{formError}</p>
+              ) : null}
+              <DialogFooter className="gap-2 sm:justify-between">
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={deletingItemId === editPlan.id}
+                  onClick={() => handleDeleteCalendarItem(editPlan)}
+                >
+                  {deletingItemId === editPlan.id ? (
+                    <Loader2 className="size-4 animate-spin" />
+                  ) : (
+                    <Trash2 className="size-4" />
+                  )}
+                  移除计划
+                </Button>
+                <div className="flex gap-2">
                   <Button
                     type="button"
                     variant="outline"
@@ -1072,13 +1200,13 @@ export function CalendarContent({
                     {isEditing ? (
                       <Loader2 className="size-4 animate-spin" />
                     ) : (
-                      <Pencil className="size-4" />
+                      <CheckCircle2 className="size-4" />
                     )}
                     保存修改
                   </Button>
-                </DialogFooter>
-              </form>
-            </>
+                </div>
+              </DialogFooter>
+            </form>
           ) : null}
         </DialogContent>
       </Dialog>

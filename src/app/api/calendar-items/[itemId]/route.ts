@@ -119,3 +119,53 @@ export async function PATCH(request: Request, context: RouteContext) {
     });
   }
 }
+
+export async function DELETE(_request: Request, context: RouteContext) {
+  try {
+    if (!process.env.DATABASE_URL) {
+      return apiError(userMessages.databaseNotConfigured, {
+        status: 500,
+        scope: "calendar/delete",
+        error: new Error("DATABASE_URL is not configured"),
+      });
+    }
+
+    const { itemId } = await context.params;
+    const { workspace, error } = await getTemporaryWorkspace();
+
+    if (!workspace) {
+      return apiError(getWorkspaceErrorMessage(error), { status: 404 });
+    }
+
+    const existing = await prisma.contentCalendarItem.findFirst({
+      where: {
+        id: itemId,
+        workspaceId: workspace.id,
+      },
+      select: { id: true },
+    });
+
+    if (!existing) {
+      return apiError("未找到可移除的内容日历项。", { status: 404 });
+    }
+
+    await prisma.contentCalendarItem.delete({
+      where: { id: existing.id },
+    });
+
+    return apiSuccess(
+      {
+        message: "内容日历计划已移除。",
+        itemId: existing.id,
+      },
+      "calendar/delete",
+      { workspaceId: workspace.id, itemId: existing.id },
+    );
+  } catch (error) {
+    return apiError("内容日历计划移除失败，请稍后重试。", {
+      status: 500,
+      scope: "calendar/delete",
+      error,
+    });
+  }
+}

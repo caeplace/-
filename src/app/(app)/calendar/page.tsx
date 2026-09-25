@@ -66,13 +66,10 @@ export default async function CalendarPage() {
     }));
 
   return (
-    <div className="space-y-6">
-      <PageHeader
-        eyebrow="Calendar"
-        title={`${data.workspace.name} 内容日历`}
-        description="从内容库创建发布计划，支持列表和月历视图。MVP 阶段只做计划、管理和状态标记，不做自动发布。"
-      />
-      <CalendarContent items={items} generatedContents={generatedContents} />
-    </div>
+    <CalendarContent
+      workspaceName={data.workspace.name}
+      items={items}
+      generatedContents={generatedContents}
+    />
   );
 }
