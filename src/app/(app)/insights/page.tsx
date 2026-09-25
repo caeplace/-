@@ -5,6 +5,7 @@ import {
   CheckCircle2,
   FileText,
   Lightbulb,
+  MessageSquareReply,
   PackageOpen,
   Sparkles,
   Upload,
@@ -249,6 +250,14 @@ export default async function InsightsPage() {
         eyebrow="Insights"
         title={`${data.workspace.name} 运营建议`}
         description={`${data.monthLabel}，只基于品牌档案、素材、生成内容、内容日历和品牌记忆。`}
+        action={
+          <Button asChild variant="outline">
+            <Link href="/reply-assistant">
+              <MessageSquareReply className="size-4" />
+              生成评论/私信回复
+            </Link>
+          </Button>
+        }
       />
 
       <Card>
