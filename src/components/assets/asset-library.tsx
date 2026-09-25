@@ -1,6 +1,8 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 import type { AssetStatus, AssetType, ContentStatus, Platform } from "@prisma/client";
 import {
   Archive,
@@ -10,14 +12,11 @@ import {
   Film,
   LinkIcon,
   Loader2,
-  PackageOpen,
   Pencil,
   Search,
   Sparkles,
   Tags,
 } from "lucide-react";
-import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { AssetAnalyzeButton } from "@/components/assets/asset-analyze-button";
 import { AssetStatusSelect } from "@/components/assets/asset-status-select";
 import { AssetUploadDialog } from "@/components/assets/asset-upload-dialog";
@@ -46,7 +45,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/toast-provider";
 import { getApiErrorMessage, parseApiPayload } from "@/lib/client-api";
@@ -196,7 +194,7 @@ function getUsageHint(asset: AssetLibraryAsset) {
   }
 
   return {
-    label: "未被内容使用",
+    label: "未使用",
     variant: "outline" as const,
     isPublished: false,
   };
@@ -211,8 +209,21 @@ function AssetIcon({ type }: { type: AssetType }) {
 }
 
 function AssetPreview({ asset }: { asset: AssetLibraryAsset }) {
+  const imageUrl =
+    asset.type === "IMAGE" ? asset.thumbnailUrl ?? asset.fileUrl : null;
+
+  if (imageUrl) {
+    return (
+      <div
+        className="size-11 shrink-0 rounded-md border bg-muted bg-cover bg-center"
+        style={{ backgroundImage: `url(${imageUrl})` }}
+        aria-label={getAssetName(asset)}
+      />
+    );
+  }
+
   return (
-    <div className="flex size-11 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
+    <div className="flex size-11 shrink-0 items-center justify-center rounded-md border bg-muted text-muted-foreground">
       <AssetIcon type={asset.type} />
     </div>
   );
@@ -287,13 +298,23 @@ function ArchiveAssetButton({
       disabled={isSaving || asset.status === "ARCHIVED"}
       onClick={archiveAsset}
     >
-      {isSaving ? <Loader2 className="size-4 animate-spin" /> : <Archive className="size-4" />}
+      {isSaving ? (
+        <Loader2 className="size-4 animate-spin" />
+      ) : (
+        <Archive className="size-4" />
+      )}
       {asset.status === "ARCHIVED" ? "已归档" : "归档"}
     </Button>
   );
 }
 
-function AssetTagsEditor({ asset }: { asset: AssetLibraryAsset }) {
+function AssetTagsEditor({
+  asset,
+  onSaved,
+}: {
+  asset: AssetLibraryAsset;
+  onSaved?: () => void;
+}) {
   const router = useRouter();
   const { showToast } = useToast();
   const [value, setValue] = useState(asset.tags.join("，"));
@@ -322,6 +343,7 @@ function AssetTagsEditor({ asset }: { asset: AssetLibraryAsset }) {
 
       showToast({ type: "success", title: "标签已保存" });
       router.refresh();
+      onSaved?.();
     } catch (error) {
       const message = error instanceof Error ? error.message : "标签保存失败。";
       showToast({ type: "error", title: "保存失败", description: message });
@@ -331,20 +353,24 @@ function AssetTagsEditor({ asset }: { asset: AssetLibraryAsset }) {
   }
 
   return (
-    <div className="space-y-2">
-      <label className="text-sm font-medium" htmlFor={`asset-tags-${asset.id}`}>
+    <div className="space-y-3">
+      <label className="space-y-2 text-sm font-medium" htmlFor={`asset-tags-${asset.id}`}>
         标签
+        <Textarea
+          id={`asset-tags-${asset.id}`}
+          value={value}
+          onChange={(event) => setValue(event.target.value)}
+          placeholder="用逗号分隔标签，例如：产品图，客厅，现代风"
+          className="min-h-24"
+        />
       </label>
-      <Textarea
-        id={`asset-tags-${asset.id}`}
-        value={value}
-        onChange={(event) => setValue(event.target.value)}
-        placeholder="用逗号分隔标签，例如：产品图，客厅，现代风"
-        className="min-h-20"
-      />
       <div className="flex justify-end">
         <Button type="button" size="sm" disabled={isSaving} onClick={saveTags}>
-          {isSaving ? <Loader2 className="size-4 animate-spin" /> : <Tags className="size-4" />}
+          {isSaving ? (
+            <Loader2 className="size-4 animate-spin" />
+          ) : (
+            <Tags className="size-4" />
+          )}
           保存标签
         </Button>
       </div>
@@ -371,19 +397,21 @@ function AssetDetailDialog({
                 {getAssetName(asset)}
               </DialogTitle>
               <DialogDescription>
-                {assetTypeLabels[asset.type]} · {getAssetFileMeta(asset)} · 上传于{" "}
-                {formatShortDate(asset.createdAt)}
+                {assetTypeLabels[asset.type]} · {getAssetFileMeta(asset)} ·{" "}
+                {formatFileSize(asset.sizeBytes)}
               </DialogDescription>
             </DialogHeader>
 
-            <div className="grid gap-5">
+            <div className="space-y-5">
               <div className="flex flex-wrap gap-2">
                 <Badge variant={getStatusVariant(asset.status)}>
                   {assetStatusLabels[asset.status]}
                 </Badge>
                 <Badge variant={usage.variant}>{usage.label}</Badge>
                 <Badge variant="outline">{asset.batch.name}</Badge>
-                <Badge variant="outline">{formatFileSize(asset.sizeBytes)}</Badge>
+                <Badge variant="outline">
+                  上传于 {formatShortDate(asset.createdAt)}
+                </Badge>
               </div>
 
               <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_15rem]">
@@ -395,7 +423,7 @@ function AssetDetailDialog({
                     </p>
                   </section>
 
-                  <div className="grid gap-3 text-sm">
+                  <div className="grid gap-3 text-sm md:grid-cols-2">
                     <div>
                       <p className="font-medium">产品名</p>
                       <p className="mt-1 break-words text-muted-foreground">
@@ -406,12 +434,6 @@ function AssetDetailDialog({
                       <p className="font-medium">场景</p>
                       <p className="mt-1 break-words text-muted-foreground">
                         {asset.scene ?? "未识别"}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="font-medium">建议用途</p>
-                      <p className="mt-1 break-words text-muted-foreground">
-                        {asset.suggestedUse ?? "暂无建议"}
                       </p>
                     </div>
                     <div>
@@ -427,6 +449,12 @@ function AssetDetailDialog({
                           <span className="text-muted-foreground">暂无推荐</span>
                         )}
                       </div>
+                    </div>
+                    <div>
+                      <p className="font-medium">建议用途</p>
+                      <p className="mt-1 break-words text-muted-foreground">
+                        {asset.suggestedUse ?? "暂无建议"}
+                      </p>
                     </div>
                   </div>
                 </div>
@@ -446,19 +474,16 @@ function AssetDetailDialog({
                     variant="outline"
                   />
                   <ArchiveAssetButton asset={asset} />
-                  <Separator />
-                  <div className="space-y-2">
-                    <p className="text-sm font-medium">修改状态</p>
+                  <div className="border-t pt-3">
+                    <p className="mb-2 text-sm font-medium">修改状态</p>
                     <AssetStatusSelect assetId={asset.id} status={asset.status} />
                   </div>
                 </aside>
               </div>
 
-              <AssetTagsEditor asset={asset} />
-
               <section className="space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <h3 className="text-sm font-medium">内容使用情况</h3>
+                  <h3 className="text-sm font-medium">被哪些内容使用过</h3>
                   <Badge variant={usage.isPublished ? "default" : "outline"}>
                     {usage.isPublished ? "已发布：是" : "已发布：否"}
                   </Badge>
@@ -470,10 +495,7 @@ function AssetDetailDialog({
                       const published = isPublishedUsage(content);
 
                       return (
-                        <div
-                          key={content.id}
-                          className="rounded-md border p-3"
-                        >
+                        <div key={content.id} className="rounded-md border p-3">
                           <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                             <div className="min-w-0">
                               <p className="break-words text-sm font-medium">
@@ -504,7 +526,30 @@ function AssetDetailDialog({
                 )}
               </section>
             </div>
+          </>
+        ) : null}
+      </DialogContent>
+    </Dialog>
+  );
+}
 
+function AssetTagsDialog({
+  asset,
+  onOpenChange,
+}: {
+  asset: AssetLibraryAsset | null;
+  onOpenChange: (open: boolean) => void;
+}) {
+  return (
+    <Dialog open={Boolean(asset)} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-xl">
+        {asset ? (
+          <>
+            <DialogHeader>
+              <DialogTitle>编辑标签</DialogTitle>
+              <DialogDescription>{getAssetName(asset)}</DialogDescription>
+            </DialogHeader>
+            <AssetTagsEditor asset={asset} onSaved={() => onOpenChange(false)} />
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
                 关闭
@@ -531,14 +576,13 @@ export function AssetLibrary({
     useState<AssetStatusFilter>(initialStatus);
   const [typeFilter, setTypeFilter] = useState<AssetTypeFilter>(initialType);
   const [batchId, setBatchId] = useState(initialBatchId || "ALL");
-  const [selectedAsset, setSelectedAsset] = useState<AssetLibraryAsset | null>(
-    null,
-  );
+  const [detailAsset, setDetailAsset] = useState<AssetLibraryAsset | null>(null);
+  const [tagsAsset, setTagsAsset] = useState<AssetLibraryAsset | null>(null);
 
   const filteredAssets = useMemo(() => {
     return assets.filter((asset) => {
-      if (statusFilter !== "ALL" && asset.status !== statusFilter) return false;
       if (typeFilter !== "ALL" && asset.type !== typeFilter) return false;
+      if (statusFilter !== "ALL" && asset.status !== statusFilter) return false;
       if (batchId !== "ALL" && asset.batch.id !== batchId) return false;
       return assetMatchesQuery(asset, query.trim());
     });
@@ -546,20 +590,12 @@ export function AssetLibrary({
 
   return (
     <div className="space-y-4">
-      <Card>
-        <CardHeader className="gap-3">
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-            <div>
-              <CardTitle>素材中心</CardTitle>
-              <CardDescription>
-                当前品牌空间：{workspaceName}。上传、筛选并复用素材，详细 AI 信息点击后查看。
-              </CardDescription>
-            </div>
-            <AssetUploadDialog />
-          </div>
+      <section className="rounded-lg border bg-card p-4 shadow-sm">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
+          <AssetUploadDialog />
 
-          <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_11rem_11rem_12rem]">
-            <div className="relative">
+          <div className="flex min-w-0 flex-1 flex-col gap-3 md:flex-row">
+            <div className="relative min-w-0 flex-1">
               <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
               <Input
                 value={query}
@@ -570,26 +606,10 @@ export function AssetLibrary({
             </div>
 
             <Select
-              value={statusFilter}
-              onValueChange={(value) => setStatusFilter(value as AssetStatusFilter)}
-            >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {statusFilterOptions.map((option) => (
-                  <SelectItem key={option.value} value={option.value}>
-                    {option.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-
-            <Select
               value={typeFilter}
               onValueChange={(value) => setTypeFilter(value as AssetTypeFilter)}
             >
-              <SelectTrigger>
+              <SelectTrigger className="md:w-36">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -601,8 +621,26 @@ export function AssetLibrary({
               </SelectContent>
             </Select>
 
+            <Select
+              value={statusFilter}
+              onValueChange={(value) =>
+                setStatusFilter(value as AssetStatusFilter)
+              }
+            >
+              <SelectTrigger className="md:w-36">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {statusFilterOptions.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+
             <Select value={batchId} onValueChange={setBatchId}>
-              <SelectTrigger>
+              <SelectTrigger className="md:w-44">
                 <SelectValue placeholder="全部批次" />
               </SelectTrigger>
               <SelectContent>
@@ -615,20 +653,32 @@ export function AssetLibrary({
               </SelectContent>
             </Select>
           </div>
+        </div>
+
+        <div className="mt-3 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+          <span>当前工作区：{workspaceName}</span>
+          <span>·</span>
+          <span>共 {assets.length} 个素材</span>
+          <span>·</span>
+          <span>显示 {filteredAssets.length} 个</span>
+        </div>
+      </section>
+
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle>素材列表</CardTitle>
+          <CardDescription>
+            默认只展示关键信息；AI 分析、用途和使用记录请点击详情查看。
+          </CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="mb-3 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-            <span>共 {assets.length} 个素材</span>
-            <span>·</span>
-            <span>当前显示 {filteredAssets.length} 个</span>
-          </div>
-
           {filteredAssets.length > 0 ? (
             <div className="overflow-hidden rounded-md border">
-              <div className="hidden grid-cols-[minmax(0,1.7fr)_9rem_10rem_8rem_18rem] gap-3 border-b bg-muted/40 px-4 py-2 text-xs font-medium text-muted-foreground lg:grid">
-                <span>素材</span>
-                <span>类型</span>
-                <span>状态</span>
+              <div className="hidden grid-cols-[minmax(0,1.6fr)_7rem_12rem_9rem_7rem_28rem] gap-3 border-b bg-muted/40 px-4 py-2 text-xs font-medium text-muted-foreground xl:grid">
+                <span>文件名</span>
+                <span>文件类型</span>
+                <span>标签</span>
+                <span>使用状态</span>
                 <span>上传时间</span>
                 <span className="text-right">操作</span>
               </div>
@@ -640,7 +690,7 @@ export function AssetLibrary({
                   return (
                     <div
                       key={asset.id}
-                      className="grid gap-3 px-4 py-3 lg:grid-cols-[minmax(0,1.7fr)_9rem_10rem_8rem_18rem] lg:items-center"
+                      className="grid gap-3 px-4 py-3 xl:grid-cols-[minmax(0,1.6fr)_7rem_12rem_9rem_7rem_28rem] xl:items-center"
                     >
                       <div className="flex min-w-0 items-center gap-3">
                         <AssetPreview asset={asset} />
@@ -649,44 +699,44 @@ export function AssetLibrary({
                             {getAssetName(asset)}
                           </p>
                           <p className="mt-1 truncate text-xs text-muted-foreground">
-                            <PackageOpen className="mr-1 inline size-3" />
                             {asset.batch.name}
                           </p>
-                          <div className="mt-2 flex flex-wrap gap-1.5">
-                            {asset.tags.length > 0 ? (
-                              <>
-                                {asset.tags.slice(0, 4).map((tag) => (
-                                  <Badge
-                                    key={tag}
-                                    variant="outline"
-                                    className="max-w-28 truncate"
-                                  >
-                                    {tag}
-                                  </Badge>
-                                ))}
-                                {asset.tags.length > 4 ? (
-                                  <Badge variant="secondary">
-                                    +{asset.tags.length - 4}
-                                  </Badge>
-                                ) : null}
-                              </>
-                            ) : (
-                              <span className="text-xs text-muted-foreground">
-                                暂无标签
-                              </span>
-                            )}
-                          </div>
                         </div>
                       </div>
 
-                      <div className="flex flex-wrap items-center gap-2 lg:block">
+                      <div className="flex flex-wrap items-center gap-2 xl:block">
                         <Badge variant="outline">{assetTypeLabels[asset.type]}</Badge>
-                        <p className="mt-0 text-xs text-muted-foreground lg:mt-1">
+                        <p className="mt-0 text-xs text-muted-foreground xl:mt-1">
                           {getAssetFileMeta(asset)}
                         </p>
                       </div>
 
-                      <div className="flex flex-wrap gap-2">
+                      <div className="flex min-w-0 flex-wrap gap-1.5">
+                        {asset.tags.length > 0 ? (
+                          <>
+                            {asset.tags.slice(0, 3).map((tag) => (
+                              <Badge
+                                key={tag}
+                                variant="outline"
+                                className="max-w-24 truncate"
+                              >
+                                {tag}
+                              </Badge>
+                            ))}
+                            {asset.tags.length > 3 ? (
+                              <Badge variant="secondary">
+                                +{asset.tags.length - 3}
+                              </Badge>
+                            ) : null}
+                          </>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">
+                            暂无标签
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="flex flex-wrap gap-1.5">
                         <Badge variant={getStatusVariant(asset.status)}>
                           {assetStatusLabels[asset.status]}
                         </Badge>
@@ -697,36 +747,36 @@ export function AssetLibrary({
                         {formatShortDate(asset.createdAt)}
                       </p>
 
-                      <div className="flex flex-wrap justify-start gap-2 lg:justify-end">
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="outline"
-                          onClick={() => setSelectedAsset(asset)}
-                        >
-                          详情
-                        </Button>
-                        <AssetAnalyzeButton
-                          assetId={asset.id}
-                          label="AI"
-                          size="sm"
-                          showNotice={false}
-                          variant="outline"
-                        />
+                      <div className="flex flex-wrap justify-start gap-2 xl:justify-end">
                         <Button asChild type="button" size="sm">
                           <Link href={buildContentStudioHref(asset.id)}>
                             <Sparkles className="size-4" />
-                            生成
+                            用于生成内容
                           </Link>
                         </Button>
                         <Button
                           type="button"
                           size="sm"
                           variant="outline"
-                          onClick={() => setSelectedAsset(asset)}
+                          onClick={() => setDetailAsset(asset)}
+                        >
+                          查看详情
+                        </Button>
+                        <AssetAnalyzeButton
+                          assetId={asset.id}
+                          label="AI 分析"
+                          size="sm"
+                          showNotice={false}
+                          variant="outline"
+                        />
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          onClick={() => setTagsAsset(asset)}
                         >
                           <Pencil className="size-4" />
-                          标签
+                          编辑标签
                         </Button>
                         <ArchiveAssetButton asset={asset} />
                       </div>
@@ -740,7 +790,7 @@ export function AssetLibrary({
               <FileImage className="mx-auto mb-3 size-8 text-muted-foreground" />
               <p className="text-sm font-medium">没有匹配的素材</p>
               <p className="mt-2 text-sm text-muted-foreground">
-                可以调整搜索或筛选条件，也可以上传新的素材批次。
+                调整搜索或筛选条件，也可以上传新的素材。
               </p>
               <div className="mt-4 flex justify-center">
                 <AssetUploadDialog />
@@ -750,53 +800,16 @@ export function AssetLibrary({
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>素材批次</CardTitle>
-          <CardDescription>
-            批次只保留管理信息，素材详情在上方列表中查看。
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {batches.length > 0 ? (
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-              {batches.map((batch) => (
-                <button
-                  key={batch.id}
-                  type="button"
-                  className="rounded-md border p-4 text-left transition-colors hover:bg-muted/40"
-                  onClick={() => setBatchId(batch.id)}
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-medium">{batch.name}</p>
-                      <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">
-                        {batch.description ?? "暂无批次说明"}
-                      </p>
-                    </div>
-                    <Badge variant="secondary">{batch.assetCount} 个</Badge>
-                  </div>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    <Badge variant="outline">{batch.source ?? "未填写来源"}</Badge>
-                    <Badge variant="outline">
-                      更新于 {formatShortDate(batch.updatedAt)}
-                    </Badge>
-                  </div>
-                </button>
-              ))}
-            </div>
-          ) : (
-            <div className="rounded-md border border-dashed p-8 text-center text-sm text-muted-foreground">
-              还没有素材批次。
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
       <AssetDetailDialog
-        asset={selectedAsset}
+        asset={detailAsset}
         onOpenChange={(open) => {
-          if (!open) setSelectedAsset(null);
+          if (!open) setDetailAsset(null);
+        }}
+      />
+      <AssetTagsDialog
+        asset={tagsAsset}
+        onOpenChange={(open) => {
+          if (!open) setTagsAsset(null);
         }}
       />
     </div>

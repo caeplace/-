@@ -122,13 +122,7 @@ export default async function AssetsPage({ searchParams }: AssetsPageProps) {
   }));
 
   return (
-    <div className="space-y-6">
-      <PageHeader
-        eyebrow="Assets"
-        title={`${data.workspace.name} 素材库`}
-        description="像文件库一样管理素材：上传、搜索、筛选、复用；AI 分析详情点击后再查看。"
-      />
-
+    <div>
       {assets.length === 0 ? (
         <EmptyState
           title="上传第一批产品素材，AI 会帮你整理和打标签。"
