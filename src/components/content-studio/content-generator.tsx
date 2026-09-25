@@ -96,6 +96,7 @@ type ContentGeneratorProps = {
   assets: AssetOption[];
   recentContents: RecentContentItem[];
   initialSelectedAssetIds?: string[];
+  initialCreativeBrief?: string;
 };
 
 type PlatformChoice = Platform | "AUTO";
@@ -299,10 +300,11 @@ export function ContentGenerator({
   assets,
   recentContents,
   initialSelectedAssetIds = [],
+  initialCreativeBrief = "",
 }: ContentGeneratorProps) {
   const router = useRouter();
   const { showToast } = useToast();
-  const [creativeBrief, setCreativeBrief] = useState("");
+  const [creativeBrief, setCreativeBrief] = useState(initialCreativeBrief);
   const [platformChoice, setPlatformChoice] = useState<PlatformChoice>("AUTO");
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [assetDialogOpen, setAssetDialogOpen] = useState(false);

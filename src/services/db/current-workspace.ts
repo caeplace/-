@@ -75,6 +75,10 @@ export async function getDashboardData() {
       calendarItemCount,
       batchCount,
       publishedCalendarItemCount,
+      pendingPublishCount,
+      assetOptions,
+      recentContents,
+      riskChecks,
     ] = await Promise.all([
       prisma.asset.count({ where: { workspaceId } }),
       prisma.asset.count({ where: { workspaceId, status: AssetStatus.UNUSED } }),
@@ -84,7 +88,61 @@ export async function getDashboardData() {
       prisma.contentCalendarItem.count({
         where: { workspaceId, status: ContentStatus.PUBLISHED },
       }),
+      prisma.contentCalendarItem.count({
+        where: {
+          workspaceId,
+          status: { in: [ContentStatus.DRAFT, ContentStatus.SCHEDULED] },
+        },
+      }),
+      prisma.asset.findMany({
+        where: {
+          workspaceId,
+          status: { not: AssetStatus.ARCHIVED },
+        },
+        orderBy: { createdAt: "desc" },
+        take: 18,
+        select: {
+          id: true,
+          title: true,
+          fileName: true,
+          type: true,
+          status: true,
+          tags: true,
+          batch: {
+            select: {
+              name: true,
+            },
+          },
+        },
+      }),
+      prisma.generatedContent.findMany({
+        where: {
+          workspaceId,
+          status: { not: ContentStatus.ARCHIVED },
+        },
+        orderBy: { updatedAt: "desc" },
+        take: 3,
+        select: {
+          id: true,
+          title: true,
+          platforms: true,
+          status: true,
+          updatedAt: true,
+        },
+      }),
+      prisma.generatedContent.findMany({
+        where: {
+          workspaceId,
+          status: { not: ContentStatus.ARCHIVED },
+        },
+        select: {
+          riskNotes: true,
+        },
+      }),
     ]);
+    const highRiskContentCount = riskChecks.filter(
+      (content) => getRiskLevel(content.riskNotes) === "high",
+    ).length;
 
     return {
       ...current,
@@ -102,6 +160,13 @@ export async function getDashboardData() {
         hasGeneratedContent: generatedContentCount > 0,
         hasCalendarItem: calendarItemCount > 0,
         hasPublishedContent: publishedCalendarItemCount > 0,
+      },
+      dashboard: {
+        pendingPublishCount,
+        unusedAssetCount,
+        highRiskContentCount,
+        assetOptions,
+        recentContents,
       },
     };
   });

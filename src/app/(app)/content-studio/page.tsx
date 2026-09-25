@@ -12,6 +12,7 @@ export const dynamic = "force-dynamic";
 type ContentStudioPageProps = {
   searchParams?: Promise<{
     assetIds?: string;
+    brief?: string;
   }>;
 };
 
@@ -78,11 +79,16 @@ function parseAssetIds(value?: string) {
     .slice(0, 12);
 }
 
+function parseInitialBrief(value?: string) {
+  return value?.trim().slice(0, 800) ?? "";
+}
+
 export default async function ContentStudioPage({
   searchParams,
 }: ContentStudioPageProps) {
   const params = await searchParams;
   const initialSelectedAssetIds = parseAssetIds(params?.assetIds);
+  const initialCreativeBrief = parseInitialBrief(params?.brief);
   const result = await getContentStudioData(initialSelectedAssetIds);
   const data = result.data;
 
@@ -145,6 +151,7 @@ export default async function ContentStudioPage({
           })),
         }))}
         initialSelectedAssetIds={initialSelectedAssetIds}
+        initialCreativeBrief={initialCreativeBrief}
       />
     </div>
   );

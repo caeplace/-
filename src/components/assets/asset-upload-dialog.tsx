@@ -1,9 +1,9 @@
 "use client";
 
-import { useRef, useState, type FormEvent } from "react";
+import { useRef, useState, type FormEvent, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { FileUp, Loader2, Upload } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Button, type ButtonProps } from "@/components/ui/button";
 import {
   Dialog,
   DialogClose,
@@ -24,6 +24,13 @@ type NoticeState = {
   message: string;
 } | null;
 
+type AssetUploadDialogProps = {
+  trigger?: ReactNode;
+  triggerLabel?: string;
+  triggerVariant?: ButtonProps["variant"];
+  triggerClassName?: string;
+};
+
 const acceptedFileTypes = [
   "image/*",
   "video/*",
@@ -40,7 +47,12 @@ const acceptedFileTypes = [
   ".tsv",
 ].join(",");
 
-export function AssetUploadDialog() {
+export function AssetUploadDialog({
+  trigger,
+  triggerLabel = "上传素材",
+  triggerVariant = "default",
+  triggerClassName,
+}: AssetUploadDialogProps = {}) {
   const router = useRouter();
   const { showToast } = useToast();
   const formRef = useRef<HTMLFormElement>(null);
@@ -88,10 +100,12 @@ export function AssetUploadDialog() {
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button>
-          <Upload className="size-4" />
-          上传素材
-        </Button>
+        {trigger ?? (
+          <Button variant={triggerVariant} className={triggerClassName}>
+            <Upload className="size-4" />
+            {triggerLabel}
+          </Button>
+        )}
       </DialogTrigger>
       <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
         <form ref={formRef} className="space-y-5" onSubmit={handleSubmit}>
