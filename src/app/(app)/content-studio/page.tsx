@@ -112,13 +112,7 @@ export default async function ContentStudioPage({
   }
 
   return (
-    <div className="space-y-6">
-      <PageHeader
-        eyebrow="Content Studio"
-        title="AI 内容生成"
-        description="基于品牌档案、长期记忆和已分析素材，生成多平台营销内容草稿。"
-      />
-
+    <div>
       <ContentGenerator
         workspaceName={data.workspace.name}
         brandName={data.brandProfile?.brandName ?? null}

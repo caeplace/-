@@ -1,24 +1,34 @@
 "use client";
 
-import { type FormEvent, useMemo, useState } from "react";
-import Link from "next/link";
+import {
+  type DragEvent,
+  type FormEvent,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useRouter } from "next/navigation";
 import type { ContentStatus, ContentType, Platform } from "@prisma/client";
 import {
   AlertTriangle,
   CalendarDays,
+  Check,
   CheckCircle2,
   ChevronDown,
   Copy,
   Eye,
-  FileImage,
+  FilePlus2,
+  FileText,
   Loader2,
+  MessageSquareText,
   Pencil,
   Save,
+  SendHorizontal,
   SlidersHorizontal,
   Sparkles,
   Trash2,
   UploadCloud,
+  X,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -38,7 +48,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/toast-provider";
 import { getApiErrorMessage, parseApiPayload } from "@/lib/client-api";
@@ -49,6 +58,7 @@ import {
   platformLabels,
 } from "@/lib/labels";
 import type { ComplianceCheckResult } from "@/lib/prompts/compliance-check";
+import { cn } from "@/lib/utils";
 import type {
   ContentGenerationFormValues,
   ContentOutputLanguage,
@@ -101,6 +111,38 @@ type ContentGeneratorProps = {
 
 type PlatformChoice = Platform | "AUTO";
 
+type GenerationTurn = {
+  id: string;
+  prompt: string;
+  assetIds: string[];
+  generationForm: ContentGenerationFormValues;
+  platformChoice: PlatformChoice;
+  variants: GeneratedContentVariantValues[];
+  status: "loading" | "done" | "error";
+  message?: string;
+};
+
+type EditingVariantState = {
+  turnId: string;
+  index: number;
+} | null;
+
+const acceptedFileTypes = [
+  "image/*",
+  "video/*",
+  "application/pdf",
+  ".doc",
+  ".docx",
+  ".ppt",
+  ".pptx",
+  ".xls",
+  ".xlsx",
+  ".txt",
+  ".md",
+  ".csv",
+  ".tsv",
+].join(",");
+
 const platformOptions = [
   "INSTAGRAM",
   "TIKTOK",
@@ -139,6 +181,10 @@ const defaultForm: ContentGenerationFormValues = {
   extraInstructions: "",
 };
 
+function createLocalId() {
+  return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
+}
+
 function isPlatform(value: string): value is Platform {
   return (platformOptions as readonly string[]).includes(value);
 }
@@ -174,7 +220,7 @@ function validateGenerationForm(
   }
 
   if (marketingGoal.length < 2) {
-    return { ok: false, message: "请先告诉云雀你想生成什么内容。" };
+    return { ok: false, message: "请先描述你想生成什么内容。" };
   }
 
   if (marketingGoal.length > 800) {
@@ -293,6 +339,35 @@ function getAssetHint(asset: AssetOption) {
   return "未分析素材";
 }
 
+function getVariantKey(turnId: string, index: number) {
+  return `${turnId}:${index}`;
+}
+
+function normalizeUploadedAsset(value: unknown): AssetOption | null {
+  if (!value || typeof value !== "object") return null;
+
+  const record = value as Record<string, unknown>;
+
+  if (typeof record.id !== "string" || typeof record.title !== "string") {
+    return null;
+  }
+
+  return {
+    id: record.id,
+    title: record.title,
+    fileName: typeof record.fileName === "string" ? record.fileName : null,
+    type: typeof record.type === "string" ? record.type : "DOCUMENT",
+    tags: Array.isArray(record.tags)
+      ? record.tags.filter((tag): tag is string => typeof tag === "string")
+      : [],
+    aiDescription:
+      typeof record.aiDescription === "string" ? record.aiDescription : null,
+    productName:
+      typeof record.productName === "string" ? record.productName : null,
+    scene: typeof record.scene === "string" ? record.scene : null,
+  };
+}
+
 export function ContentGenerator({
   workspaceName,
   brandName,
@@ -304,10 +379,14 @@ export function ContentGenerator({
 }: ContentGeneratorProps) {
   const router = useRouter();
   const { showToast } = useToast();
-  const [creativeBrief, setCreativeBrief] = useState(initialCreativeBrief);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [composerText, setComposerText] = useState(initialCreativeBrief);
   const [platformChoice, setPlatformChoice] = useState<PlatformChoice>("AUTO");
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [assetDialogOpen, setAssetDialogOpen] = useState(false);
+  const [assetSearch, setAssetSearch] = useState("");
+  const [uploadedAssets, setUploadedAssets] = useState<AssetOption[]>([]);
   const [form, setForm] = useState<ContentGenerationFormValues>(() => {
     const availableAssetIds = new Set(assets.map((asset) => asset.id));
     const selectedAssets = initialSelectedAssetIds
@@ -319,16 +398,14 @@ export function ContentGenerator({
       selectedAssets,
     };
   });
-  const [lastGenerationForm, setLastGenerationForm] =
-    useState<ContentGenerationFormValues | null>(null);
-  const [lastPlatformChoice, setLastPlatformChoice] =
-    useState<PlatformChoice>("AUTO");
-  const [variants, setVariants] = useState<GeneratedContentVariantValues[]>([]);
+  const [turns, setTurns] = useState<GenerationTurn[]>([]);
   const [notice, setNotice] = useState<NoticeState>(null);
   const [isGenerating, setIsGenerating] = useState(false);
-  const [savingIndex, setSavingIndex] = useState<number | null>(null);
-  const [savedIndexes, setSavedIndexes] = useState<number[]>([]);
-  const [savedContentIds, setSavedContentIds] = useState<Record<number, string>>(
+  const [isUploading, setIsUploading] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
+  const [savingKey, setSavingKey] = useState<string | null>(null);
+  const [savedKeys, setSavedKeys] = useState<string[]>([]);
+  const [savedContentIds, setSavedContentIds] = useState<Record<string, string>>(
     {},
   );
   const [detailsContent, setDetailsContent] = useState<RecentContentItem | null>(
@@ -337,9 +414,8 @@ export function ContentGenerator({
   const [editingContent, setEditingContent] = useState<RecentContentItem | null>(
     null,
   );
-  const [editingVariantIndex, setEditingVariantIndex] = useState<number | null>(
-    null,
-  );
+  const [editingVariant, setEditingVariant] =
+    useState<EditingVariantState>(null);
   const [calendarContent, setCalendarContent] = useState<RecentContentItem | null>(
     null,
   );
@@ -354,15 +430,47 @@ export function ContentGenerator({
   const [calendarNotes, setCalendarNotes] = useState("");
   const [actionContentId, setActionContentId] = useState<string | null>(null);
 
+  const availableAssets = useMemo(() => {
+    const assetMap = new Map<string, AssetOption>();
+
+    for (const asset of assets) {
+      assetMap.set(asset.id, asset);
+    }
+
+    for (const asset of uploadedAssets) {
+      assetMap.set(asset.id, asset);
+    }
+
+    return [...assetMap.values()];
+  }, [assets, uploadedAssets]);
+
   const selectedAssetDetails = useMemo(
-    () => assets.filter((asset) => form.selectedAssets.includes(asset.id)),
-    [assets, form.selectedAssets],
+    () =>
+      availableAssets.filter((asset) => form.selectedAssets.includes(asset.id)),
+    [availableAssets, form.selectedAssets],
   );
 
-  const generatedAssetDetails = useMemo(() => {
-    const selectedIds = lastGenerationForm?.selectedAssets ?? form.selectedAssets;
-    return assets.filter((asset) => selectedIds.includes(asset.id));
-  }, [assets, form.selectedAssets, lastGenerationForm]);
+  const filteredAssets = useMemo(() => {
+    const keyword = assetSearch.trim().toLowerCase();
+
+    if (!keyword) return availableAssets;
+
+    return availableAssets.filter((asset) => {
+      const haystack = [
+        asset.title,
+        asset.fileName,
+        asset.type,
+        asset.productName,
+        asset.scene,
+        asset.tags.join(" "),
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+
+      return haystack.includes(keyword);
+    });
+  }, [assetSearch, availableAssets]);
 
   function notify(
     type: "success" | "error" | "info",
@@ -404,8 +512,29 @@ export function ContentGenerator({
     });
   }
 
-  function buildGenerationValues() {
-    const userBrief = creativeBrief.trim();
+  function addUploadedAssetsToContext(nextAssets: AssetOption[]) {
+    if (nextAssets.length === 0) return;
+
+    setUploadedAssets((current) => {
+      const assetMap = new Map(current.map((asset) => [asset.id, asset]));
+
+      for (const asset of nextAssets) {
+        assetMap.set(asset.id, asset);
+      }
+
+      return [...assetMap.values()];
+    });
+
+    setForm((current) => ({
+      ...current,
+      selectedAssets: [
+        ...new Set([...current.selectedAssets, ...nextAssets.map((asset) => asset.id)]),
+      ].slice(0, 12),
+    }));
+  }
+
+  function buildGenerationValues(promptText: string) {
+    const userBrief = promptText.trim();
     const advancedGoal = form.marketingGoal.trim();
     const marketingGoal = [
       userBrief,
@@ -437,36 +566,116 @@ export function ContentGenerator({
     });
   }
 
+  async function uploadFiles(files: File[]) {
+    if (files.length === 0 || isUploading) return;
+
+    setIsUploading(true);
+    setNotice({
+      type: "info",
+      message: "正在上传素材，上传完成后会自动加入当前创作上下文。",
+    });
+
+    try {
+      const formData = new FormData();
+      const batchName = `内容生成上传 ${new Intl.DateTimeFormat("zh-CN", {
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+      }).format(new Date())}`;
+
+      formData.append("name", batchName);
+      formData.append("tags", "内容生成");
+      for (const file of files) {
+        formData.append("files", file);
+      }
+
+      const response = await fetch("/api/assets/upload", {
+        method: "POST",
+        body: formData,
+      });
+      const payload = await parseApiPayload(response);
+
+      if (!response.ok) {
+        notify(
+          "error",
+          "上传失败",
+          getApiErrorMessage(payload, "素材上传失败，请稍后再试。"),
+        );
+        return;
+      }
+
+      const nextAssets = Array.isArray(payload.assets)
+        ? (payload.assets as unknown[])
+            .map(normalizeUploadedAsset)
+            .filter((asset): asset is AssetOption => Boolean(asset))
+        : [];
+
+      addUploadedAssetsToContext(nextAssets);
+      notify(
+        "success",
+        "上传完成",
+        nextAssets.length > 0
+          ? `已上传并选中 ${nextAssets.length} 个素材。`
+          : "素材已上传，页面会刷新后显示。",
+      );
+      router.refresh();
+    } catch {
+      notify("error", "上传失败", "网络暂时不可用，素材上传失败。");
+    } finally {
+      setIsUploading(false);
+      setIsDragging(false);
+    }
+  }
+
+  function handleDrop(event: DragEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setIsDragging(false);
+    const files = Array.from(event.dataTransfer.files ?? []);
+    void uploadFiles(files);
+  }
+
   async function handleGenerate(event?: FormEvent<HTMLFormElement>) {
     event?.preventDefault();
     if (isGenerating) return;
 
-    const parsed = buildGenerationValues();
+    const promptText =
+      composerText.trim() ||
+      (form.selectedAssets.length > 0
+        ? "请基于已选素材生成一条适合社媒发布的内容。"
+        : "");
+    const parsed = buildGenerationValues(promptText);
 
     if (!parsed.ok) {
       notify("error", "还缺一点信息", parsed.message);
       return;
     }
 
+    const turn: GenerationTurn = {
+      id: createLocalId(),
+      prompt: promptText,
+      assetIds: [...form.selectedAssets],
+      generationForm: parsed.data,
+      platformChoice,
+      variants: [],
+      status: "loading",
+    };
+
     if (form.selectedAssets.length === 0) {
-      notify(
-        "info",
-        "可以直接生成",
-        "当前没有选择素材；添加素材后内容会更贴合具体产品。",
-      );
+      setNotice({
+        type: "info",
+        message: "当前没有选择素材；可以直接生成，添加素材后内容会更贴合具体产品。",
+      });
     } else {
       setNotice({
         type: "info",
-        message: "正在生成内容并进行合规检查，通常需要 10-30 秒，请稍候。",
+        message: "正在生成内容并进行合规检查，通常需要 10-30 秒。",
       });
     }
 
-    setSavedIndexes([]);
-    setSavedContentIds({});
-    setVariants([]);
+    setTurns((current) => [...current, turn]);
+    setComposerText("");
     setIsGenerating(true);
-    setLastGenerationForm(parsed.data);
-    setLastPlatformChoice(platformChoice);
 
     try {
       const response = await fetch("/api/content-studio/generate", {
@@ -477,29 +686,62 @@ export function ContentGenerator({
       const payload = await parseApiPayload(response);
 
       if (!response.ok) {
-        notify(
-          "error",
-          "生成失败",
-          getApiErrorMessage(payload, "内容生成失败，请稍后再试。"),
+        const message = getApiErrorMessage(
+          payload,
+          "内容生成失败，请稍后再试。",
         );
+        setTurns((current) =>
+          current.map((item) =>
+            item.id === turn.id ? { ...item, status: "error", message } : item,
+          ),
+        );
+        notify("error", "生成失败", message);
         return;
       }
 
-      const nextVariants = payload.variants ?? [];
-      setVariants(nextVariants);
+      const nextVariants = Array.isArray(payload.variants)
+        ? payload.variants
+        : [];
 
       if (nextVariants.length === 0) {
-        notify("error", "生成失败", "AI 没有返回可展示的内容，请调整需求后重试。");
+        const message = "AI 没有返回可展示的内容，请调整需求后重试。";
+        setTurns((current) =>
+          current.map((item) =>
+            item.id === turn.id ? { ...item, status: "error", message } : item,
+          ),
+        );
+        notify("error", "生成失败", message);
         return;
       }
 
+      setTurns((current) =>
+        current.map((item) =>
+          item.id === turn.id
+            ? {
+                ...item,
+                status: "done",
+                variants: nextVariants,
+                message:
+                  typeof payload.message === "string"
+                    ? payload.message
+                    : "内容已生成。",
+              }
+            : item,
+        ),
+      );
       notify(
         "success",
         "生成完成",
         typeof payload.message === "string" ? payload.message : "内容已生成。",
       );
     } catch {
-      notify("error", "生成失败", "网络暂时不可用，内容生成失败。");
+      const message = "网络暂时不可用，内容生成失败。";
+      setTurns((current) =>
+        current.map((item) =>
+          item.id === turn.id ? { ...item, status: "error", message } : item,
+        ),
+      );
+      notify("error", "生成失败", message);
     } finally {
       setIsGenerating(false);
     }
@@ -508,23 +750,18 @@ export function ContentGenerator({
   async function handleSave(
     variant: GeneratedContentVariantValues,
     index: number,
+    turn: GenerationTurn,
   ) {
-    const generationForm = lastGenerationForm;
-
-    if (!generationForm) {
-      notify("error", "保存失败", "请先生成内容，再保存到内容库。");
-      return;
-    }
-
+    const key = getVariantKey(turn.id, index);
     setNotice(null);
-    setSavingIndex(index);
+    setSavingKey(key);
 
     try {
       const response = await fetch("/api/content-studio/save", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          ...generationForm,
+          ...turn.generationForm,
           variant,
         }),
       });
@@ -544,9 +781,9 @@ export function ContentGenerator({
           ? payload.content.id
           : null;
 
-      setSavedIndexes((current) => [...new Set([...current, index])]);
+      setSavedKeys((current) => [...new Set([...current, key])]);
       if (contentId) {
-        setSavedContentIds((current) => ({ ...current, [index]: contentId }));
+        setSavedContentIds((current) => ({ ...current, [key]: contentId }));
       }
       notify(
         "success",
@@ -557,7 +794,7 @@ export function ContentGenerator({
     } catch {
       notify("error", "保存失败", "网络暂时不可用，内容保存失败。");
     } finally {
-      setSavingIndex(null);
+      setSavingKey(null);
     }
   }
 
@@ -587,28 +824,36 @@ export function ContentGenerator({
 
   function openVariantEdit(
     variant: GeneratedContentVariantValues,
+    turnId: string,
     index: number,
   ) {
-    setEditingVariantIndex(index);
+    setEditingVariant({ turnId, index });
     setVariantEditTitle(variant.title);
     setVariantEditBody(variant.body);
   }
 
   function handleUpdateVariant() {
-    if (editingVariantIndex === null) return;
+    if (!editingVariant) return;
 
-    setVariants((current) =>
-      current.map((variant, index) =>
-        index === editingVariantIndex
+    setTurns((current) =>
+      current.map((turn) =>
+        turn.id === editingVariant.turnId
           ? {
-              ...variant,
-              title: variantEditTitle.trim() || variant.title,
-              body: variantEditBody.trim() || variant.body,
+              ...turn,
+              variants: turn.variants.map((variant, index) =>
+                index === editingVariant.index
+                  ? {
+                      ...variant,
+                      title: variantEditTitle.trim() || variant.title,
+                      body: variantEditBody.trim() || variant.body,
+                    }
+                  : variant,
+              ),
             }
-          : variant,
+          : turn,
       ),
     );
-    setEditingVariantIndex(null);
+    setEditingVariant(null);
     notify("success", "已更新", "生成结果已在当前页面更新，保存后会写入内容库。");
   }
 
@@ -622,32 +867,46 @@ export function ContentGenerator({
   function openGeneratedVariantCalendar(
     variant: GeneratedContentVariantValues,
     index: number,
+    turn: GenerationTurn,
   ) {
-    const contentId = savedContentIds[index];
-    const generationForm = lastGenerationForm;
+    const key = getVariantKey(turn.id, index);
+    const contentId = savedContentIds[key];
 
-    if (!contentId || !generationForm) {
+    if (!contentId) {
       notify("info", "先保存内容", "保存到内容库后，就可以加入内容日历。");
       return;
     }
+
+    const assetsForTurn = availableAssets.filter((asset) =>
+      turn.assetIds.includes(asset.id),
+    );
 
     openCalendar({
       id: contentId,
       title: variant.title,
       body: `${variant.hook}\n\n${variant.body}`,
       status: "DRAFT",
-      platforms: [generationForm.platform],
-      type: generationForm.contentType,
+      platforms: [turn.generationForm.platform],
+      type: turn.generationForm.contentType,
       hashtags: variant.hashtags,
       callToAction: variant.cta,
       createdAt: new Date().toISOString(),
       riskNotes: variant.complianceCheck ?? null,
-      assets: generatedAssetDetails.map((asset) => ({
+      assets: assetsForTurn.map((asset) => ({
         id: asset.id,
         title: asset.title,
         fileName: asset.fileName,
       })),
     });
+  }
+
+  function continueFromVariant(variant: GeneratedContentVariantValues) {
+    const previousDraft = formatVariantText(variant).slice(0, 560);
+
+    setComposerText(
+      `请基于下面这版继续修改：\n\n${previousDraft}\n\n修改要求：`,
+    );
+    window.setTimeout(() => composerRef.current?.focus(), 0);
   }
 
   async function handleUpdateContent() {
@@ -770,505 +1029,508 @@ export function ContentGenerator({
     }
   }
 
-  const generationPlatformLabel = lastGenerationForm
-    ? platformLabels[lastGenerationForm.platform]
-    : "AI 自动推荐";
+  function renderVariantCard(
+    variant: GeneratedContentVariantValues,
+    index: number,
+    turn: GenerationTurn,
+  ) {
+    const key = getVariantKey(turn.id, index);
+    const isSaved = savedKeys.includes(key);
+    const riskLevel = variant.complianceCheck?.riskLevel;
+
+    return (
+      <div
+        key={key}
+        className={cn(
+          "rounded-md border bg-background p-4 shadow-sm",
+          riskLevel === "high" && "border-destructive/40 bg-destructive/5",
+        )}
+      >
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div className="min-w-0">
+            <div className="mb-2 flex flex-wrap gap-1.5">
+              <Badge variant="outline">
+                {turn.platformChoice === "AUTO"
+                  ? `AI 推荐 · ${platformLabels[turn.generationForm.platform]}`
+                  : platformLabels[turn.generationForm.platform]}
+              </Badge>
+              <Badge variant="secondary">
+                {contentTypeLabels[turn.generationForm.contentType]}
+              </Badge>
+              <Badge variant="outline">
+                {outputLanguageLabels[turn.generationForm.outputLanguage]}
+              </Badge>
+              <Badge
+                variant={getRiskBadgeVariant(riskLevel)}
+                className={
+                  riskLevel === "high"
+                    ? "bg-destructive text-destructive-foreground"
+                    : ""
+                }
+              >
+                {getRiskLabel(riskLevel)}
+              </Badge>
+            </div>
+            <h3 className="text-base font-semibold leading-6">{variant.title}</h3>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => handleCopyVariant(variant)}
+            >
+              <Copy className="size-4" />
+              复制
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => openVariantEdit(variant, turn.id, index)}
+            >
+              <Pencil className="size-4" />
+              编辑
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              disabled={savingKey === key}
+              onClick={() => handleSave(variant, index, turn)}
+            >
+              {savingKey === key ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <Save className="size-4" />
+              )}
+              {isSaved ? "已保存" : "保存"}
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => openGeneratedVariantCalendar(variant, index, turn)}
+            >
+              <CalendarDays className="size-4" />
+              加入日历
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => continueFromVariant(variant)}
+            >
+              <MessageSquareText className="size-4" />
+              继续修改
+            </Button>
+          </div>
+        </div>
+
+        <div className="mt-4 grid gap-4 lg:grid-cols-[1fr_16rem]">
+          <div className="space-y-4">
+            <div>
+              <p className="text-xs font-medium text-muted-foreground">开头钩子</p>
+              <p className="mt-2 text-sm leading-7">{variant.hook}</p>
+            </div>
+            <div>
+              <p className="text-xs font-medium text-muted-foreground">正文</p>
+              <p className="mt-2 whitespace-pre-line text-sm leading-7">
+                {variant.body}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs font-medium text-muted-foreground">CTA</p>
+              <p className="mt-2 text-sm leading-7">{variant.cta}</p>
+            </div>
+          </div>
+          <div className="rounded-md bg-muted/35 p-4">
+            <p className="text-sm font-medium">标签</p>
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {variant.hashtags.length > 0 ? (
+                variant.hashtags.map((tag) => (
+                  <Badge key={tag} variant="outline">
+                    {tag}
+                  </Badge>
+                ))
+              ) : (
+                <span className="text-xs text-muted-foreground">暂无标签</span>
+              )}
+            </div>
+            <div className="mt-4 border-t pt-4">
+              <p className="text-sm font-medium">建议使用的素材</p>
+              <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                {variant.visualSuggestion}
+              </p>
+            </div>
+            <div className="mt-4 border-t pt-4">
+              <p className="text-sm font-medium">风险提示</p>
+              <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                {variant.complianceCheck?.overallSuggestion ?? "暂无合规检查结果。"}
+              </p>
+              {riskLevel === "high" &&
+              variant.complianceCheck?.issues.length ? (
+                <p className="mt-2 text-xs leading-5 text-muted-foreground">
+                  主要问题：{variant.complianceCheck.issues[0]?.reason}
+                </p>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="space-y-5">
+    <div className="mx-auto flex max-w-6xl flex-col gap-4">
+      <div className="rounded-lg border bg-card px-4 py-3 shadow-sm">
+        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <div className="min-w-0">
+            <p className="text-xs uppercase text-muted-foreground">
+              Content Studio
+            </p>
+            <h1 className="mt-1 truncate text-xl font-semibold tracking-normal">
+              {brandName ?? "未填写品牌名称"}
+            </h1>
+            <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">
+              {brandTone || "默认使用清爽、可信、克制的表达。"}
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Badge variant="secondary">工作区：{workspaceName}</Badge>
+            <Badge variant="outline">已选素材 {selectedAssetDetails.length}</Badge>
+          </div>
+        </div>
+      </div>
+
       {notice ? (
         <div
-          className={`rounded-md border px-3 py-2 text-sm ${
-            notice.type === "success"
-              ? "border-emerald-200 bg-emerald-50 text-emerald-800"
-              : notice.type === "info"
-                ? "border-primary/20 bg-primary/5 text-foreground"
-                : "border-destructive/30 bg-destructive/10 text-destructive"
-          }`}
+          className={cn(
+            "rounded-md border px-3 py-2 text-sm",
+            notice.type === "success" &&
+              "border-emerald-200 bg-emerald-50 text-emerald-800",
+            notice.type === "info" &&
+              "border-primary/20 bg-primary/5 text-foreground",
+            notice.type === "error" &&
+              "border-destructive/30 bg-destructive/10 text-destructive",
+          )}
         >
           {notice.message}
         </div>
       ) : null}
 
-      <div className="grid gap-4 xl:grid-cols-[280px_1fr]">
-        <Card className="self-start">
-          <CardHeader>
-            <CardTitle className="text-base">当前品牌</CardTitle>
-            <CardDescription>AI 会参考品牌档案、记忆和已选素材。</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div>
-              <p className="text-xs text-muted-foreground">品牌名称</p>
-              <p className="mt-1 font-medium">{brandName ?? "未填写品牌名称"}</p>
-            </div>
-            <div>
-              <p className="text-xs text-muted-foreground">品牌语调</p>
-              <p className="mt-1 text-sm leading-6 text-muted-foreground">
-                {brandTone || "未填写，默认使用清爽、可信、克制的表达。"}
-              </p>
-            </div>
-            <Separator />
-            <div>
-              <p className="text-xs text-muted-foreground">当前工作区</p>
-              <p className="mt-1 font-medium">{workspaceName}</p>
-            </div>
-            <div className="rounded-md bg-muted/50 p-3 text-xs leading-5 text-muted-foreground">
-              输入越像真实任务，云雀越能像社媒运营同事一样给出可直接编辑的草稿。
-            </div>
-          </CardContent>
-        </Card>
-
-        <div className="space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Sparkles className="size-4 text-primary" />
-                和云雀说你想创作什么
-              </CardTitle>
-              <CardDescription>
-                可以直接描述平台、产品、素材用途和想要的风格；高级设置先不用管。
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <form className="space-y-4" onSubmit={handleGenerate}>
-                <Textarea
-                  className="min-h-36 resize-y text-base leading-7"
-                  value={creativeBrief}
-                  onChange={(event) => setCreativeBrief(event.target.value)}
-                  placeholder="例如：用这几张产品图生成一篇 Instagram 新品发布文案；帮我写一条适合 TikTok 的短视频脚本；根据这个产品资料生成小红书种草文案。"
-                  disabled={isGenerating}
-                />
-
-                <div className="rounded-md border bg-muted/20 p-3">
-                  <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium">已选择素材</p>
-                      <p className="mt-1 text-xs text-muted-foreground">
-                        不选素材也可以生成；添加素材后内容会更贴合产品。
-                      </p>
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setAssetDialogOpen(true)}
-                      >
-                        <FileImage className="size-4" />
-                        选择素材
-                      </Button>
-                      <Button type="button" variant="outline" size="sm" asChild>
-                        <Link href="/assets">
-                          <UploadCloud className="size-4" />
-                          去素材库上传
-                        </Link>
-                      </Button>
-                    </div>
-                  </div>
-
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {selectedAssetDetails.length > 0 ? (
-                      selectedAssetDetails.map((asset) => (
-                        <button
-                          key={asset.id}
-                          type="button"
-                          className="inline-flex max-w-full items-center gap-2 rounded-md border bg-background px-2 py-1 text-xs hover:bg-muted"
-                          onClick={() => toggleAsset(asset.id)}
-                          title="点击移除"
-                        >
-                          <span className="truncate">{getAssetName(asset)}</span>
-                          <span className="text-muted-foreground">移除</span>
-                        </button>
-                      ))
-                    ) : (
-                      <span className="text-xs text-muted-foreground">
-                        当前未选择素材，云雀会先基于品牌档案和品牌记忆生成通用草稿。
-                      </span>
-                    )}
-                  </div>
-                </div>
-
-                <div className="rounded-md border">
-                  <button
-                    type="button"
-                    className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left"
-                    onClick={() => setAdvancedOpen((current) => !current)}
-                  >
-                    <span className="inline-flex items-center gap-2 text-sm font-medium">
-                      <SlidersHorizontal className="size-4 text-primary" />
-                      高级设置
-                    </span>
-                    <ChevronDown
-                      className={`size-4 text-muted-foreground transition-transform ${
-                        advancedOpen ? "rotate-180" : ""
-                      }`}
-                    />
-                  </button>
-
-                  {advancedOpen ? (
-                    <div className="space-y-4 border-t p-4">
-                      <div className="grid gap-4 md:grid-cols-2">
-                        <label className="space-y-2 text-sm font-medium">
-                          平台
-                          <select
-                            className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
-                            value={platformChoice}
-                            onChange={(event) =>
-                              handlePlatformChoiceChange(event.target.value)
-                            }
-                            disabled={isGenerating}
-                          >
-                            <option value="AUTO">AI 自动推荐 / 通用</option>
-                            {platformOptions.map((platform) => (
-                              <option key={platform} value={platform}>
-                                {platformLabels[platform]}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-
-                        <label className="space-y-2 text-sm font-medium">
-                          内容类型
-                          <select
-                            className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
-                            value={form.contentType}
-                            onChange={(event) =>
-                              updateForm(
-                                "contentType",
-                                event.target.value as ContentType,
-                              )
-                            }
-                            disabled={isGenerating}
-                          >
-                            {contentTypeOptions.map((contentType) => (
-                              <option key={contentType} value={contentType}>
-                                {contentTypeLabels[contentType]}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-
-                        <label className="space-y-2 text-sm font-medium">
-                          输出语言
-                          <select
-                            className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
-                            value={form.outputLanguage}
-                            onChange={(event) =>
-                              updateForm(
-                                "outputLanguage",
-                                event.target.value as ContentOutputLanguage,
-                              )
-                            }
-                            disabled={isGenerating}
-                          >
-                            {outputLanguageOptions.map((option) => (
-                              <option key={option.value} value={option.value}>
-                                {option.label}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-
-                        <label className="space-y-2 text-sm font-medium md:col-span-2">
-                          营销目标
-                          <Input
-                            value={form.marketingGoal}
-                            onChange={(event) =>
-                              updateForm("marketingGoal", event.target.value)
-                            }
-                            placeholder="可选，例如：新品首发、提升转化、引导收藏、解释卖点。"
-                            disabled={isGenerating}
-                          />
-                        </label>
-
-                        <label className="space-y-2 text-sm font-medium">
-                          语气
-                          <Input
-                            value={form.tone}
-                            onChange={(event) =>
-                              updateForm("tone", event.target.value)
-                            }
-                            placeholder="例如：专业、轻松、可信、有画面感"
-                            disabled={isGenerating}
-                          />
-                        </label>
-
-                        <label className="space-y-2 text-sm font-medium">
-                          生成数量
-                          <Input
-                            min={1}
-                            max={5}
-                            type="number"
-                            value={form.numberOfVariants}
-                            onChange={(event) =>
-                              updateForm(
-                                "numberOfVariants",
-                                Number(event.target.value),
-                              )
-                            }
-                            disabled={isGenerating}
-                          />
-                        </label>
-
-                        <label className="space-y-2 text-sm font-medium md:col-span-2">
-                          额外要求
-                          <Textarea
-                            className="min-h-24"
-                            value={form.extraInstructions}
-                            onChange={(event) =>
-                              updateForm("extraInstructions", event.target.value)
-                            }
-                            placeholder="例如：避免夸大功效；标题更像真实分享；CTA 不要太硬。"
-                            disabled={isGenerating}
-                          />
-                        </label>
-                      </div>
-                    </div>
-                  ) : null}
-                </div>
-
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <p className="text-xs text-muted-foreground">
-                    {platformChoice === "AUTO"
-                      ? "平台未固定，云雀会根据你的需求判断更适合的表达方式。"
-                      : `将按 ${platformLabels[platformChoice]} 风格生成。`}
-                  </p>
-                  <Button disabled={isGenerating} type="submit" size="lg">
-                    {isGenerating ? (
-                      <>
-                        <Loader2 className="size-4 animate-spin" />
-                        正在生成...
-                      </>
-                    ) : (
-                      <>
-                        <Sparkles className="size-4" />
-                        生成内容
-                      </>
-                    )}
-                  </Button>
-                </div>
-              </form>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                <div>
-                  <CardTitle>生成结果</CardTitle>
-                  <CardDescription>
-                    每条结果都可以复制、编辑、保存，保存后可加入内容日历。
-                  </CardDescription>
-                </div>
-                {savedIndexes.length > 0 ? (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() => router.push("/calendar")}
-                  >
-                    <CalendarDays className="size-4" />
-                    去日历
-                  </Button>
-                ) : null}
+      <Card className="overflow-hidden">
+        <CardContent className="min-h-[52vh] space-y-5 overflow-y-auto p-4 md:p-6">
+          {turns.length === 0 ? (
+            <div className="flex min-h-[40vh] items-center justify-center">
+              <div className="max-w-xl text-center">
+                <Sparkles className="mx-auto mb-4 size-10 text-primary" />
+                <h2 className="text-xl font-semibold">把素材和需求交给云雀</h2>
+                <p className="mt-3 text-sm leading-6 text-muted-foreground">
+                  拖入产品图、选择素材库里的资料，然后像和同事沟通一样描述你要的内容。
+                  平台、内容类型和语气都可以让 AI 先判断。
+                </p>
               </div>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {variants.length > 0 ? (
-                variants.map((variant, index) => {
-                  const isSaved = savedIndexes.includes(index);
-                  const savedContentId = savedContentIds[index];
-                  const riskLevel = variant.complianceCheck?.riskLevel;
+            </div>
+          ) : null}
 
-                  return (
-                    <div
-                      key={`${variant.title}-${index}`}
-                      className={`rounded-md border bg-background p-4 ${
-                        riskLevel === "high"
-                          ? "border-destructive/40 bg-destructive/5"
-                          : ""
-                      }`}
-                    >
-                      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                        <div className="min-w-0">
-                          <div className="flex flex-wrap gap-2">
-                            <Badge variant="outline">
-                              {lastPlatformChoice === "AUTO"
-                                ? `AI 推荐 · ${generationPlatformLabel}`
-                                : generationPlatformLabel}
-                            </Badge>
-                            <Badge variant="secondary">
-                              {contentTypeLabels[
-                                lastGenerationForm?.contentType ?? form.contentType
-                              ]}
-                            </Badge>
-                            <Badge variant="outline">
-                              {
-                                outputLanguageLabels[
-                                  lastGenerationForm?.outputLanguage ??
-                                    form.outputLanguage
-                                ]
-                              }
-                            </Badge>
-                            <Badge
-                              variant={getRiskBadgeVariant(riskLevel)}
-                              className={
-                                riskLevel === "high"
-                                  ? "bg-destructive text-destructive-foreground"
-                                  : ""
-                              }
-                            >
-                              {getRiskLabel(riskLevel)}
-                            </Badge>
-                            {isSaved ? <Badge>已保存</Badge> : null}
-                          </div>
-                          <h2 className="mt-3 text-lg font-semibold leading-7">
-                            {variant.title}
-                          </h2>
-                        </div>
+          {turns.map((turn) => {
+            const turnAssets = availableAssets.filter((asset) =>
+              turn.assetIds.includes(asset.id),
+            );
 
-                        <div className="flex flex-wrap gap-2">
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            onClick={() => handleCopyVariant(variant)}
+            return (
+              <div key={turn.id} className="space-y-4">
+                <div className="flex justify-end">
+                  <div className="max-w-[88%] rounded-lg bg-primary px-4 py-3 text-primary-foreground shadow-sm">
+                    <p className="whitespace-pre-line text-sm leading-7">
+                      {turn.prompt}
+                    </p>
+                    {turnAssets.length > 0 ? (
+                      <div className="mt-3 flex flex-wrap gap-1.5">
+                        {turnAssets.map((asset) => (
+                          <span
+                            key={asset.id}
+                            className="rounded-md bg-primary-foreground/15 px-2 py-1 text-xs"
                           >
-                            <Copy className="size-4" />
-                            复制
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            onClick={() => openVariantEdit(variant, index)}
-                          >
-                            <Pencil className="size-4" />
-                            编辑
-                          </Button>
-                          <Button
-                            type="button"
-                            size="sm"
-                            disabled={savingIndex === index || isSaved}
-                            onClick={() => handleSave(variant, index)}
-                          >
-                            {savingIndex === index ? (
-                              <Loader2 className="size-4 animate-spin" />
-                            ) : (
-                              <Save className="size-4" />
-                            )}
-                            {isSaved ? "已保存" : "保存"}
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            disabled={!savedContentId}
-                            onClick={() => openGeneratedVariantCalendar(variant, index)}
-                            title={savedContentId ? "加入内容日历" : "先保存后加入日历"}
-                          >
-                            <CalendarDays className="size-4" />
-                            加入日历
-                          </Button>
-                        </div>
+                            {getAssetName(asset)}
+                          </span>
+                        ))}
                       </div>
-
-                      {riskLevel === "high" ? (
-                        <div className="mt-4 flex gap-3 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
-                          <AlertTriangle className="mt-0.5 size-4 shrink-0" />
-                          <div>
-                            <p className="font-medium">高风险内容，请谨慎使用</p>
-                            <p className="mt-1 leading-6">
-                              建议先按合规提示改写，再进入发布计划。
-                            </p>
-                          </div>
-                        </div>
-                      ) : null}
-
-                      <Separator className="my-4" />
-
-                      <div className="grid gap-4 lg:grid-cols-[1fr_260px]">
-                        <div className="space-y-4">
-                          <div>
-                            <p className="text-sm font-medium">开头钩子</p>
-                            <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                              {variant.hook}
-                            </p>
-                          </div>
-                          <div>
-                            <p className="text-sm font-medium">正文</p>
-                            <p className="mt-2 whitespace-pre-line text-sm leading-7 text-muted-foreground">
-                              {variant.body}
-                            </p>
-                          </div>
-                          <div>
-                            <p className="text-sm font-medium">CTA</p>
-                            <p className="mt-2 text-sm text-muted-foreground">
-                              {variant.cta}
-                            </p>
-                          </div>
-                        </div>
-
-                        <div className="rounded-md bg-muted/35 p-4">
-                          <p className="text-sm font-medium">标签</p>
-                          <div className="mt-3 flex flex-wrap gap-2">
-                            {variant.hashtags.map((tag) => (
-                              <Badge key={tag} variant="outline">
-                                {tag}
-                              </Badge>
-                            ))}
-                          </div>
-                          <Separator className="my-4" />
-                          <p className="text-sm font-medium">素材建议</p>
-                          <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                            {variant.visualSuggestion}
-                          </p>
-                          <Separator className="my-4" />
-                          <p className="text-sm font-medium">风险提示</p>
-                          {variant.complianceCheck ? (
-                            <div className="mt-2 space-y-2">
-                              <p className="text-sm leading-6 text-muted-foreground">
-                                {variant.complianceCheck.overallSuggestion}
-                              </p>
-                              {riskLevel === "high" &&
-                              variant.complianceCheck.issues.length > 0 ? (
-                                <p className="text-xs leading-5 text-muted-foreground">
-                                  主要问题：
-                                  {variant.complianceCheck.issues[0]?.reason}
-                                </p>
-                              ) : null}
-                            </div>
-                          ) : (
-                            <p className="mt-2 text-sm text-muted-foreground">
-                              暂无合规检查结果。
-                            </p>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })
-              ) : (
-                <div className="rounded-md border border-dashed bg-muted/30 p-10 text-center">
-                  <Sparkles className="mx-auto mb-3 size-8 text-muted-foreground" />
-                  <p className="text-sm font-medium">
-                    输入需求后，云雀会在这里给出内容草稿。
-                  </p>
-                  <p className="mt-2 text-sm text-muted-foreground">
-                    你可以先不选平台和素材，直接让 AI 判断方向。
-                  </p>
+                    ) : null}
+                  </div>
                 </div>
-              )}
-            </CardContent>
-          </Card>
-        </div>
-      </div>
+
+                <div className="flex gap-3">
+                  <div className="mt-1 flex size-8 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+                    <Sparkles className="size-4" />
+                  </div>
+                  <div className="min-w-0 flex-1 space-y-3">
+                    {turn.status === "loading" ? (
+                      <div className="rounded-md border bg-muted/25 p-4 text-sm text-muted-foreground">
+                        <Loader2 className="mr-2 inline size-4 animate-spin" />
+                        正在生成内容并完成合规检查...
+                      </div>
+                    ) : null}
+
+                    {turn.status === "error" ? (
+                      <div className="rounded-md border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
+                        <AlertTriangle className="mr-2 inline size-4" />
+                        {turn.message ?? "生成失败，请稍后再试。"}
+                      </div>
+                    ) : null}
+
+                    {turn.status === "done" ? (
+                      <>
+                        {turn.message ? (
+                          <p className="text-xs text-muted-foreground">
+                            {turn.message}
+                          </p>
+                        ) : null}
+                        {turn.variants.map((variant, index) =>
+                          renderVariantCard(variant, index, turn),
+                        )}
+                      </>
+                    ) : null}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </CardContent>
+      </Card>
+
+      <section className="sticky bottom-0 z-20 rounded-lg border bg-background/95 p-3 shadow-lg backdrop-blur">
+        <form
+          className={cn(
+            "rounded-md border border-dashed p-3 transition-colors",
+            isDragging && "border-primary bg-primary/5",
+          )}
+          onSubmit={handleGenerate}
+          onDragOver={(event) => {
+            event.preventDefault();
+            setIsDragging(true);
+          }}
+          onDragLeave={() => setIsDragging(false)}
+          onDrop={handleDrop}
+        >
+          <input
+            ref={fileInputRef}
+            className="hidden"
+            type="file"
+            accept={acceptedFileTypes}
+            multiple
+            onChange={(event) => {
+              const files = Array.from(event.currentTarget.files ?? []);
+              event.currentTarget.value = "";
+              void uploadFiles(files);
+            }}
+          />
+          <Textarea
+            ref={composerRef}
+            className="min-h-28 resize-none border-0 px-0 py-0 text-base leading-7 shadow-none focus-visible:ring-0"
+            value={composerText}
+            onChange={(event) => setComposerText(event.target.value)}
+            placeholder="描述你想生成的内容，例如：用这些产品图写一篇适合 Instagram 的新品发布文案。"
+            disabled={isGenerating}
+          />
+
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            {selectedAssetDetails.length > 0 ? (
+              selectedAssetDetails.map((asset) => (
+                <button
+                  key={asset.id}
+                  type="button"
+                  className="inline-flex max-w-56 items-center gap-1 rounded-md border bg-background px-2 py-1 text-xs hover:bg-muted"
+                  title="点击移除素材"
+                  onClick={() => toggleAsset(asset.id)}
+                >
+                  <FileText className="size-3" />
+                  <span className="truncate">{getAssetName(asset)}</span>
+                  <X className="size-3 text-muted-foreground" />
+                </button>
+              ))
+            ) : (
+              <span className="text-xs text-muted-foreground">
+                可直接拖拽文件到这里上传；不选素材也能生成。
+              </span>
+            )}
+          </div>
+
+          <div className="mt-3 rounded-md border">
+            <button
+              type="button"
+              className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left"
+              onClick={() => setAdvancedOpen((current) => !current)}
+            >
+              <span className="inline-flex items-center gap-2 text-sm font-medium">
+                <SlidersHorizontal className="size-4 text-primary" />
+                高级设置
+              </span>
+              <ChevronDown
+                className={cn(
+                  "size-4 text-muted-foreground transition-transform",
+                  advancedOpen && "rotate-180",
+                )}
+              />
+            </button>
+
+            {advancedOpen ? (
+              <div className="grid gap-3 border-t p-3 md:grid-cols-2">
+                <label className="space-y-2 text-sm font-medium">
+                  平台
+                  <select
+                    className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+                    value={platformChoice}
+                    onChange={(event) =>
+                      handlePlatformChoiceChange(event.target.value)
+                    }
+                    disabled={isGenerating}
+                  >
+                    <option value="AUTO">AI 自动识别 / 通用</option>
+                    {platformOptions.map((platform) => (
+                      <option key={platform} value={platform}>
+                        {platformLabels[platform]}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="space-y-2 text-sm font-medium">
+                  内容类型
+                  <select
+                    className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+                    value={form.contentType}
+                    onChange={(event) =>
+                      updateForm("contentType", event.target.value as ContentType)
+                    }
+                    disabled={isGenerating}
+                  >
+                    {contentTypeOptions.map((contentType) => (
+                      <option key={contentType} value={contentType}>
+                        {contentTypeLabels[contentType]}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="space-y-2 text-sm font-medium">
+                  输出语言
+                  <select
+                    className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+                    value={form.outputLanguage}
+                    onChange={(event) =>
+                      updateForm(
+                        "outputLanguage",
+                        event.target.value as ContentOutputLanguage,
+                      )
+                    }
+                    disabled={isGenerating}
+                  >
+                    {outputLanguageOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="space-y-2 text-sm font-medium">
+                  生成数量
+                  <Input
+                    min={1}
+                    max={5}
+                    type="number"
+                    value={form.numberOfVariants}
+                    onChange={(event) =>
+                      updateForm("numberOfVariants", Number(event.target.value))
+                    }
+                    disabled={isGenerating}
+                  />
+                </label>
+
+                <label className="space-y-2 text-sm font-medium md:col-span-2">
+                  营销目标
+                  <Input
+                    value={form.marketingGoal}
+                    onChange={(event) =>
+                      updateForm("marketingGoal", event.target.value)
+                    }
+                    placeholder="可选，例如：新品首发、提升转化、引导收藏。"
+                    disabled={isGenerating}
+                  />
+                </label>
+
+                <label className="space-y-2 text-sm font-medium">
+                  语气
+                  <Input
+                    value={form.tone}
+                    onChange={(event) => updateForm("tone", event.target.value)}
+                    placeholder="例如：专业、轻松、可信、有画面感"
+                    disabled={isGenerating}
+                  />
+                </label>
+
+                <label className="space-y-2 text-sm font-medium md:col-span-2">
+                  额外要求
+                  <Textarea
+                    className="min-h-20"
+                    value={form.extraInstructions}
+                    onChange={(event) =>
+                      updateForm("extraInstructions", event.target.value)
+                    }
+                    placeholder="例如：避免夸大功效；标题更像真实分享；CTA 不要太硬。"
+                    disabled={isGenerating}
+                  />
+                </label>
+              </div>
+            ) : null}
+          </div>
+
+          <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-xs text-muted-foreground">
+              {platformChoice === "AUTO"
+                ? "平台未固定，云雀会从你的描述中识别 Instagram / TikTok / 小红书等平台。"
+                : `将按 ${platformLabels[platformChoice]} 风格生成。`}
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={isUploading}
+                onClick={() => fileInputRef.current?.click()}
+              >
+                {isUploading ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <UploadCloud className="size-4" />
+                )}
+                上传素材
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setAssetDialogOpen(true)}
+              >
+                <FilePlus2 className="size-4" />
+                选择素材
+              </Button>
+              <Button disabled={isGenerating} type="submit">
+                {isGenerating ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <SendHorizontal className="size-4" />
+                )}
+                生成
+              </Button>
+            </div>
+          </div>
+        </form>
+      </section>
 
       <Card>
         <CardHeader>
           <CardTitle>最近生成内容</CardTitle>
-          <CardDescription>
-            已保存内容会以 DRAFT 状态进入内容库；这里仅保留轻量管理入口。
-          </CardDescription>
+          <CardDescription>已保存的内容放在下方，不打断主创作流程。</CardDescription>
         </CardHeader>
         <CardContent>
           {recentContents.length > 0 ? (
@@ -1371,7 +1633,7 @@ export function ContentGenerator({
                 保存生成结果后，它会出现在这里。
               </p>
               <p className="mt-2 text-sm text-muted-foreground">
-                最近内容不会打断主创作流程，可用于快速复制、编辑或加入日历。
+                最近内容只保留轻量管理入口。
               </p>
             </div>
           )}
@@ -1383,31 +1645,38 @@ export function ContentGenerator({
           <DialogHeader>
             <DialogTitle>选择素材</DialogTitle>
             <DialogDescription>
-              最多选择 12 个素材。素材不是必填，但会让生成内容更具体。
+              最多选择 12 个素材。也可以直接把文件拖到输入区上传。
             </DialogDescription>
           </DialogHeader>
+          <Input
+            value={assetSearch}
+            onChange={(event) => setAssetSearch(event.target.value)}
+            placeholder="搜索文件名、标签、产品或场景"
+          />
           <div className="space-y-2">
-            {assets.length > 0 ? (
-              assets.map((asset) => {
+            {filteredAssets.length > 0 ? (
+              filteredAssets.map((asset) => {
                 const selected = form.selectedAssets.includes(asset.id);
 
                 return (
                   <button
                     key={asset.id}
                     type="button"
-                    className={`flex w-full items-start gap-3 rounded-md border p-3 text-left transition-colors ${
-                      selected ? "border-primary bg-primary/5" : "hover:bg-muted/50"
-                    }`}
+                    className={cn(
+                      "flex w-full items-start gap-3 rounded-md border p-3 text-left transition-colors hover:bg-muted/50",
+                      selected && "border-primary bg-primary/5",
+                    )}
                     onClick={() => toggleAsset(asset.id)}
                   >
                     <span
-                      className={`mt-0.5 flex size-5 shrink-0 items-center justify-center rounded border text-xs ${
+                      className={cn(
+                        "mt-0.5 flex size-5 shrink-0 items-center justify-center rounded border text-xs",
                         selected
                           ? "border-primary bg-primary text-primary-foreground"
-                          : "bg-background"
-                      }`}
+                          : "bg-background",
+                      )}
                     >
-                      {selected ? "✓" : ""}
+                      {selected ? <Check className="size-3" /> : null}
                     </span>
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-sm font-medium">
@@ -1431,16 +1700,10 @@ export function ContentGenerator({
               })
             ) : (
               <div className="rounded-md border border-dashed p-8 text-center">
-                <p className="text-sm font-medium">素材库暂无可用素材</p>
+                <p className="text-sm font-medium">暂无匹配素材</p>
                 <p className="mt-2 text-sm text-muted-foreground">
-                  可以先直接生成，也可以去素材库上传产品图、视频或资料。
+                  可直接在内容生成页上传素材，上传后会自动加入当前上下文。
                 </p>
-                <Button className="mt-4" asChild>
-                  <Link href="/assets">
-                    <UploadCloud className="size-4" />
-                    去素材库上传
-                  </Link>
-                </Button>
               </div>
             )}
           </div>
@@ -1557,14 +1820,14 @@ export function ContentGenerator({
       </Dialog>
 
       <Dialog
-        open={editingVariantIndex !== null}
-        onOpenChange={() => setEditingVariantIndex(null)}
+        open={Boolean(editingVariant)}
+        onOpenChange={() => setEditingVariant(null)}
       >
         <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>编辑生成结果</DialogTitle>
             <DialogDescription>
-              这里只修改当前页面的草稿，点击保存后才会写入内容库。
+              这里只修改当前对话里的草稿，点击保存后才会写入内容库。
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
@@ -1585,10 +1848,7 @@ export function ContentGenerator({
             </label>
           </div>
           <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setEditingVariantIndex(null)}
-            >
+            <Button variant="outline" onClick={() => setEditingVariant(null)}>
               取消
             </Button>
             <Button onClick={handleUpdateVariant}>
